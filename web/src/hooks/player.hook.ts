@@ -221,9 +221,8 @@ async function _resolveUrl(track: {
 }): Promise<{ url: string; fromCache: boolean; format: string[] }> {
     // A saved song is a Drive file id, not audio stored on this device.
     if (track.filePath?.startsWith("drive:")) {
-        const { fetchDriveAudio } = await import("@/lib/googleDrive");
-        const url = await fetchDriveAudio(track.filePath.slice("drive:".length));
-        _objectUrl = url;
+        const { prepareDrivePlayback } = await import("@/lib/googleDrive");
+        const url = await prepareDrivePlayback(track.filePath.slice("drive:".length));
         return { url, fromCache: true, format: _safeFormat("m4a") };
     }
 

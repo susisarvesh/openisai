@@ -35,10 +35,11 @@ export default function PrivacyPolicy() {
             <p>
                Google&apos;s standard description of <code>drive.file</code> tells you the app can see,
                edit, create, and delete only the specific Drive files you use with it. The code in this
-               project creates a folder, uploads files into it, lists the names and file ids in that
-               folder, reads those files so they can play, and checks whether a previously created folder
-               was moved to trash. It does not call Drive&apos;s update, delete, copy, or permissions APIs,
-               and it does not open a Google file picker.
+               project creates a folder, marks it with a private app property so this app can find it again,
+               uploads audio and a <code>save-songs.json</code> file into it, lists folders and files this
+               app created, reads that marker file, updates the marker when a playlist is saved again, and
+               checks whether a previously created folder was moved to trash. It does not call Drive&apos;s
+               delete, copy, or permissions APIs, and it does not open a Google file picker.
             </p>
          </LegalSection>
 
@@ -46,34 +47,43 @@ export default function PrivacyPolicy() {
             <p>
                The public OAuth client id is built into the website from the{" "}
                <code>VITE_GOOGLE_CLIENT_ID</code> setting. There is no Google client secret in the website.
-               The first time you export in a browser tab, Google asks you to choose an account and consent.
-               Later exports in that same tab can reuse the session Google already granted.
+               The first time you sign in or export in a browser tab, Google asks you to choose an account
+               and consent. Later actions in that same tab can reuse the session Google already granted.
+               The token client does not store a refresh token, so a new visit asks you to sign in again.
             </p>
             <p>
                Google returns an access token and an expiry time. The website keeps both in memory for that
                tab. It does not write the token to local storage, IndexedDB, or a cookie, and it does not
-               send the token to the Save Songs server. The token is sent only as a bearer credential on
-               requests from your browser to <span className="break-all">https://www.googleapis.com</span> and{" "}
+               send the token to the Save Songs server. The page also sends the current token to this
+               site&apos;s service worker, in memory, so playback can start. The service worker sends that
+               token only to Google, and the token is not placed in the audio URL. The token is sent as a
+               bearer credential on requests to <span className="break-all">https://www.googleapis.com</span> and{" "}
                <span className="break-all">https://www.googleapis.com/upload/drive</span>. When the token
-               expires, or you close the tab, the website no longer has it. A new export asks Google for a
-               token again.
+               expires, or you close the tab, the website no longer has it. Signing in, exporting, or
+               pressing play asks Google for a token again.
             </p>
          </LegalSection>
 
          <LegalSection id="drive-operations" heading="What the app does in Google Drive">
-            <p>When you choose Export to Google Drive, your browser does the following with your token:</p>
+            <p>After you sign in, and when you export, your browser does the following with your token:</p>
             <ul className="list-disc space-y-2 pl-5">
+               <li>Lists folders this app created that are not in the trash, including a private app property named <code>saveSongs</code>. <code>drive.file</code> only returns files this app created or that you opened with it, so the rest of your Drive stays hidden.</li>
+               <li>Reads <code>save-songs.json</code> inside each playlist folder. That file holds the playlist title, artwork URL, and each song&apos;s title, artist, duration, and Drive file id. Those folders are what another browser sees after you sign in with the same Google account.</li>
+               <li>For a folder this app created before that marker existed, writes the same app property and builds <code>save-songs.json</code> from the file names already in the folder.</li>
                <li>Looks up a folder id saved earlier on this device for that Spotify playlist or album, and asks Drive whether that folder still exists and is not in the trash.</li>
-               <li>If there is no usable folder, creates a new folder named after the playlist or album.</li>
+               <li>If there is no usable folder, creates a new folder named after the playlist or album and sets the private app properties <code>saveSongs=playlist</code> and the Spotify id.</li>
                <li>Lists the files in that folder. The request asks only for each file&apos;s id and name, and skips trashed files.</li>
-               <li>Uploads an audio file for a song that is not already in the folder. The upload creates a new file. It does not replace a file that is already there.</li>
-               <li>When you press play, downloads that file&apos;s bytes from Drive into the browser and plays them from a temporary object URL. The audio is not written into the on-device library database.</li>
+               <li>Uploads an audio file for a song that is not already in the folder. The upload creates a new file. It does not replace a file that is already there. A song that fails to upload is skipped.</li>
+               <li>Writes or replaces <code>save-songs.json</code> in that folder so the playlist list matches the files that were saved.</li>
+               <li>When you press play, asks this site&apos;s service worker to stream that file from Drive. The worker sends the token and the browser&apos;s range header to Google and returns the response as a stream, so playback can start before the whole file has downloaded. The audio is not written into the on-device library database, and that stream is not stored in the audio cache.</li>
             </ul>
             <p>
-               The folder id is stored on this device under a local storage key that starts with{" "}
-               <code>rheoson-drive-folder:</code>, followed by the Spotify id. Drive file ids are stored
-               in this device&apos;s IndexedDB library as part of each song&apos;s <code>filePath</code>,
-               in the form <code>drive:</code> plus the file id.
+               The folder id is also stored on this device under a local storage key that starts with{" "}
+               <code>rheoson-drive-folder:</code>, followed by the Spotify id, so a later export on this
+               browser can find the same folder. Drive file ids are cached in this device&apos;s IndexedDB
+               library as part of each song&apos;s <code>filePath</code>, in the form <code>drive:</code> plus
+               the file id. That cache is a copy. The folder in your Drive, including <code>save-songs.json</code>,
+               is the list another browser reads after you sign in there.
             </p>
          </LegalSection>
 
@@ -82,9 +92,10 @@ export default function PrivacyPolicy() {
             <ul className="list-disc space-y-2 pl-5">
                <li>The Drive folder id described above.</li>
                <li>
-                  A library in the IndexedDB database <code>rheoson-offline</code>: playlist id, Spotify id,
-                  title, artwork URL, and each saved song&apos;s title, artist, duration, artwork URL, and
-                  Drive file id. This library does not store the audio bytes.
+                  A cache of the library in the IndexedDB database <code>rheoson-offline</code>: playlist id,
+                  Spotify id, title, artwork URL, and each saved song&apos;s title, artist, duration, artwork
+                  URL, and Drive file id. This cache does not store the audio bytes. The list that travels
+                  between browsers is <code>save-songs.json</code> in your own Drive folder.
                </li>
                <li>
                   A splash timestamp (<code>rheoson-splash-last</code>) and, on iPhone, whether you dismissed
@@ -97,10 +108,11 @@ export default function PrivacyPolicy() {
             <p>
                The service worker can cache the audio response it receives from the Save Songs API while a
                song is being saved. That cache is named <code>rheoson-audio-v2</code>, holds at most 200
-               files, and keeps an entry for up to 90 days, on this device. Playback from Drive goes to
-               Google and does not use that cache. The service worker also caches the website&apos;s own
-               files so the page can load again, and it can cache some API responses from older parts of
-               the same website.
+               files, and keeps an entry for up to 90 days, on this device. Playback from Drive uses a
+               same-origin address that starts with <code>/drive-media/</code>. The service worker forwards
+               that request to Google and does not put it in <code>rheoson-audio-v2</code>. The service worker
+               also caches the website&apos;s own files so the page can load again, and it can cache some API
+               responses from older parts of the same website.
             </p>
             <p>The Save Songs API is a separate service. For the main screen it receives:</p>
             <ul className="list-disc space-y-2 pl-5">
@@ -163,7 +175,7 @@ export default function PrivacyPolicy() {
             <ul className="list-disc space-y-2 pl-5">
                <li>Show the songs on a Spotify playlist or album before anything is saved.</li>
                <li>Find a matching audio file and put it in a folder in your Google Drive when you ask.</li>
-               <li>Remember, on this device, which Drive files belong to that playlist so you can play them later.</li>
+               <li>Show the same saved playlists on any browser where you sign in with that Google account.</li>
                <li>Skip a song that is already in the folder, and continue with the rest if one song fails.</li>
                <li>Protect the API with a shared application token and with rate limits.</li>
             </ul>
@@ -189,9 +201,9 @@ export default function PrivacyPolicy() {
 
          <LegalSection id="google-limited-use" heading="Google API Services User Data Policy">
             <p>
-               Information received from Google APIs is the access token, Drive file ids and names for the
-               folder this app created, the trashed flag for that folder, and the bytes of those files when
-               you play them.
+               Information received from Google APIs is the access token, the ids, names, and private app
+               properties of folders this app created, the contents of each folder&apos;s <code>save-songs.json</code>,
+               the trashed flag for a folder, and the bytes of those audio files when you play them.
             </p>
             <p>
                Save Songs uses that information only to provide the Drive folder, upload, skip, and playback
@@ -217,10 +229,13 @@ export default function PrivacyPolicy() {
 
          <LegalSection id="retention" heading="How long information is kept">
             <p>
-               The library, folder id, splash timestamp, and install hint stay on this device until you
-               clear the site&apos;s stored data. The application does not expire them on a schedule.
-               The access token lives only until it expires or the tab closes. Google sets the expiry.
-               The code treats a token as due for replacement about a minute before that time.
+               The playlist list and the <code>save-songs.json</code> marker stay in your own Drive folder
+               until you delete that folder. Any browser signed into that Google account can read those
+               folders after you sign in there. The copy of that list in this browser, the folder id, the
+               splash timestamp, and the install hint stay on this device until you clear the site&apos;s
+               stored data. The application does not expire them on a schedule. The access token lives only
+               until it expires or the tab closes. Google sets the expiry. The code treats a token as due
+               for replacement about a minute before that time.
             </p>
             <p>
                The audio cache on this device, if the service worker stored an API response, lasts up to
@@ -258,16 +273,17 @@ export default function PrivacyPolicy() {
                   https://myaccount.google.com/permissions
                </a>
                . After you remove it, this site cannot obtain a new token for that account until you
-               consent again. Files already in Drive remain there. References already stored on this
-               device remain until you clear the site data for {PUBLIC_SITE_ORIGIN}.
+               consent again. Files already in Drive, including <code>save-songs.json</code>, remain there.
+               References cached on a device remain until you clear the site data for {PUBLIC_SITE_ORIGIN}.
             </p>
          </LegalSection>
 
          <LegalSection id="deletion" heading="Deletion requests">
             <p>
                There is no Save Songs account to delete for the main screen, and the server does not keep
-               a copy of your Google profile or Drive files. To remove the on-device library, clear this
-               site&apos;s data in your browser. To remove the audio, delete the folder in Google Drive.
+               a copy of your Google profile or Drive files. To remove the shared playlist list and the
+               audio, delete that folder in Google Drive. To remove the copy cached in a browser, clear
+               this site&apos;s data there.
             </p>
             <p>
                If you still want to ask a question or request deletion of something you believe the

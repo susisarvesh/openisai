@@ -16,7 +16,12 @@ import {
    fileBase,
    googleAccessToken,
    googleClientId,
+   isGoogleSignedIn,
+   loadSharedLibrary,
    uploadToDrive,
+   writePlaylistManifest,
+   type DriveSong,
+   type SharedPlaylist,
 } from "@/lib/googleDrive";
 import { requestWakeLock, releaseWakeLock } from "@/lib/keepAwake";
 import { playlistsStore, tracksStore } from "@/lib/localDb";
@@ -56,6 +61,37 @@ function playlistFrom(spotifyId: string, title: string, tracks: Track[], created
    };
 }
 
+function savedFromDrive(shared: SharedPlaylist): Playlist {
+   const tracks = shared.tracks.map((song) => ({
+      id: song.fileId,
+      title: song.title,
+      artist: { name: song.artist || "Unknown" },
+      artworkUrl: song.artworkUrl || shared.artworkUrl,
+      duration: song.duration || 0,
+      streamUrl: "",
+      filePath: `drive:${song.fileId}`,
+   } as Track));
+   const playlist = playlistFrom(shared.spotifyId || shared.folderId, shared.title, tracks);
+   if (!shared.spotifyId) playlist.id = `drive-${shared.folderId}`;
+   playlist.artworkUrl = shared.artworkUrl || playlist.artworkUrl;
+   playlist.spotifyId = shared.spotifyId;
+   return playlist;
+}
+
+function manifestSongs(tracks: Track[]): DriveSong[] {
+   return tracks.flatMap((track) => {
+      const fileId = track.filePath?.startsWith("drive:") ? track.filePath.slice("drive:".length) : "";
+      if (!fileId) return [];
+      return [{
+         title: track.title,
+         artist: track.artist?.name || "Unknown",
+         duration: track.duration || 0,
+         fileId,
+         artworkUrl: track.artworkUrl || "",
+      }];
+   });
+}
+
 export default function LocalPlaylist() {
    const { toast } = useToast();
    const { playTrack, playAll } = useQueue();
@@ -70,6 +106,8 @@ export default function LocalPlaylist() {
    const [saved, setSaved] = useState<Playlist[]>([]);
    const [activeId, setActiveId] = useState<string | null>(null);
    const [showInstall, setShowInstall] = useState(false);
+   const [signedIn, setSignedIn] = useState(isGoogleSignedIn);
+   const [signingIn, setSigningIn] = useState(false);
 
    const trimmed = url.trim();
    const parsed = parseSpotifyUrl(trimmed);
@@ -101,13 +139,22 @@ export default function LocalPlaylist() {
       root.style.setProperty("--text-secondary", "#b3b3b3");
    }, []);
 
+   const applyLibrary = async (rows: SharedPlaylist[]) => {
+      const playlists = rows.map(savedFromDrive);
+      for (const playlist of playlists) {
+         await tracksStore.putAll(playlist.tracks);
+         await playlistsStore.put(playlist);
+      }
+      setSaved(playlists);
+      setActiveId((current) => playlists.some((row) => row.id === current) ? current : playlists[0]?.id ?? null);
+   };
+
    useEffect(() => {
+      if (!isGoogleSignedIn()) return;
       let cancelled = false;
-      playlistsStore.getAll().then((rows) => {
-         if (cancelled) return;
-         const local = rows.filter((row) => (row.tracks ?? []).some((track) => track.filePath?.startsWith("drive:")));
-         setSaved(local);
-         setActiveId((current) => current ?? local[0]?.id ?? null);
+      setSignedIn(true);
+      loadSharedLibrary().then((rows) => {
+         if (!cancelled) return applyLibrary(rows);
       }).catch(() => undefined);
       return () => {
          cancelled = true;
@@ -204,6 +251,12 @@ export default function LocalPlaylist() {
             const previous = await playlistsStore.get(`spotify-${parsed.id}`);
             const playlist = playlistFrom(parsed.id, title, savedTracks, previous?.createdAt);
             playlist.artworkUrl = preview.artworkUrl || playlist.artworkUrl;
+            await writePlaylistManifest(folderId, {
+               spotifyId: parsed.id,
+               title,
+               artworkUrl: playlist.artworkUrl,
+               tracks: manifestSongs(savedTracks),
+            });
             await remember(playlist);
             setPreview(null);
          }
@@ -224,6 +277,26 @@ export default function LocalPlaylist() {
       }
    };
 
+   const signIn = async () => {
+      if (signingIn) return;
+      if (!googleClientId()) {
+         setError("Add VITE_GOOGLE_CLIENT_ID before signing in.");
+         return;
+      }
+      setSigningIn(true);
+      setError("");
+      try {
+         await googleAccessToken();
+         await applyLibrary(await loadSharedLibrary());
+         setSignedIn(true);
+      } catch (err) {
+         const message = err instanceof Error ? err.message : "Google sign-in was cancelled";
+         setError(message);
+      } finally {
+         setSigningIn(false);
+      }
+   };
+
    const driveLabel = phase.kind === "exporting"
       ? phase.title === "Finding the songs…"
          ? "Finding the songs…"
@@ -234,6 +307,31 @@ export default function LocalPlaylist() {
       : 0;
    const playable = (active?.tracks ?? []).filter((track) => track.filePath?.startsWith("drive:"));
 
+   if (!signedIn) {
+      return (
+         <div className="flex min-h-full flex-col bg-black px-6 py-10 text-white" style={{ fontFamily: "Inter, system-ui, -apple-system, sans-serif" }}>
+            <div className="mx-auto flex w-full max-w-[420px] flex-1 flex-col items-center justify-center text-center">
+               <img src="/assets/openisai-logo.png" alt="" className="h-16 w-16 rounded-full object-cover" />
+               <h1 className="mt-6 text-[32px] font-bold leading-none">Save Songs</h1>
+               <p className="mt-4 text-[15px] leading-snug text-[#b3b3b3]">
+                  Sign in with Google. Playlists you save stay in your Drive and show up here on your other devices.
+               </p>
+               <button
+                  type="button"
+                  onClick={() => void signIn()}
+                  disabled={signingIn}
+                  className="mt-8 h-12 rounded-full bg-white px-8 text-[15px] font-bold text-black disabled:opacity-60">
+                  {signingIn ? "Signing in…" : "Sign in with Google"}
+               </button>
+               {error ? <p className="mt-4 text-[13px] leading-snug text-[#f3727f]">{error}</p> : null}
+            </div>
+            <div className="mx-auto mt-10 w-full max-w-[420px]">
+               <LegalLinks />
+            </div>
+         </div>
+      );
+   }
+
    return (
       <div className="min-h-full bg-black text-white lg:grid lg:grid-cols-[340px_minmax(0,1fr)]" style={{ fontFamily: "Inter, system-ui, -apple-system, sans-serif" }}>
          <aside className="sticky top-0 hidden h-dvh flex-col overflow-y-auto bg-[#121212] px-3 py-4 lg:flex">
@@ -243,7 +341,7 @@ export default function LocalPlaylist() {
             </div>
             <h2 className="px-3 py-2 text-[16px] font-bold leading-[1.2]">Your library</h2>
             {saved.length === 0 ? (
-               <p className="px-3 text-[13px] leading-snug text-[#b3b3b3]">Playlists land here after they are saved to Drive.</p>
+               <p className="px-3 text-[13px] leading-snug text-[#b3b3b3]">Playlists saved to your Google Drive show up here.</p>
             ) : (
                <ul className="mt-2 flex flex-col gap-1">
                   {saved.map((playlist) => (
