@@ -219,6 +219,14 @@ async function _resolveUrl(track: {
     filePath?: string;
     isDownloaded?: boolean;
 }): Promise<{ url: string; fromCache: boolean; format: string[] }> {
+    // A saved song is a Drive file id, not audio stored on this device.
+    if (track.filePath?.startsWith("drive:")) {
+        const { fetchDriveAudio } = await import("@/lib/googleDrive");
+        const url = await fetchDriveAudio(track.filePath.slice("drive:".length));
+        _objectUrl = url;
+        return { url, fromCache: true, format: _safeFormat("m4a") };
+    }
+
     // Tier 0: cached audio bytes
     const cached = await getCachedObjectUrl(track.id);
     if (cached) {
@@ -439,7 +447,8 @@ export function usePlayer() {
                     // (a visible seven-second wait on skip).
                     const upcoming = useQueueStore
                         .getState()
-                        .queue.slice(0, 5);
+                        .queue.slice(0, 5)
+                        .filter((item) => !item.filePath?.startsWith("drive:"));
                     if (upcoming.length > 0) {
                         prefetchQueue(upcoming.map(t => t.id), _gaplessQueue() ? 5 : 0);
                     }
@@ -570,10 +579,19 @@ export function usePlayer() {
                     );
                 }
             });
-            }).catch(() => {
-                // URL resolution failed — load error is already handled above
+            }).catch((err: unknown) => {
+                if (gen !== _generation) return;
                 setLoading(false);
+                setPlaying(false);
                 _loadedId = null;
+                window.dispatchEvent(
+                    new CustomEvent("rheoson:play-error", {
+                        detail: {
+                            trackId,
+                            error: err instanceof Error ? err.message : "Could not play that song from Drive",
+                        },
+                    })
+                );
             });
         },
         [] // eslint-disable-line react-hooks/exhaustive-deps -- stable: all state accessed via refs or store.getState()

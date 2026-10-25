@@ -118,14 +118,14 @@ export async function driveFolder(name: string, key: string): Promise<string> {
    return folder.id;
 }
 
-export async function driveFileNames(folderId: string): Promise<Set<string>> {
-   const names = new Set<string>();
+export async function driveFiles(folderId: string): Promise<Map<string, string>> {
+   const files = new Map<string, string>();
    let pageToken = "";
    const safeId = folderId.replace(/'/g, "\\'");
    do {
       const params = new URLSearchParams({
          q: `'${safeId}' in parents and trashed=false`,
-         fields: "nextPageToken,files(name)",
+         fields: "nextPageToken,files(id,name)",
          pageSize: "1000",
       });
       if (pageToken) params.set("pageToken", pageToken);
@@ -133,23 +133,33 @@ export async function driveFileNames(folderId: string): Promise<Set<string>> {
          headers: await authHeader(),
       });
       if (!res.ok) throw new Error("Could not read the Drive folder");
-      const body = await res.json() as { nextPageToken?: string; files?: { name?: string }[] };
+      const body = await res.json() as { nextPageToken?: string; files?: { id?: string; name?: string }[] };
       for (const file of body.files ?? []) {
-         if (file.name) names.add(file.name);
+         if (file.id && file.name) files.set(file.name, file.id);
       }
       pageToken = body.nextPageToken ?? "";
    } while (pageToken);
-   return names;
+   return files;
 }
 
-export function alreadyInDrive(names: Set<string>, base: string): boolean {
-   for (const name of names) {
-      if (name === base || name.startsWith(`${base}.`)) return true;
+export function driveFileId(files: Map<string, string>, base: string): string | undefined {
+   for (const [name, id] of files) {
+      if (name === base || name.startsWith(`${base}.`)) return id;
    }
-   return false;
+   return undefined;
 }
 
-export async function uploadToDrive(folderId: string, name: string, blob: Blob): Promise<void> {
+export async function fetchDriveAudio(fileId: string): Promise<string> {
+   const res = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`,
+      { headers: await authHeader() },
+   );
+   if (!res.ok) throw new Error("Could not play that song from Drive");
+   const blob = await res.blob();
+   return URL.createObjectURL(blob);
+}
+
+export async function uploadToDrive(folderId: string, name: string, blob: Blob): Promise<string> {
    const type = blob.type || "application/octet-stream";
    const start = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable", {
       method: "POST",
@@ -169,6 +179,9 @@ export async function uploadToDrive(folderId: string, name: string, blob: Blob):
       body: blob,
    });
    if (!put.ok) throw new Error("Drive upload failed");
+   const created = await put.json() as { id?: string };
+   if (!created.id) throw new Error("Drive upload failed");
+   return created.id;
 }
 
 export function fileBase(artist: string, title: string): string {

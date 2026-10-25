@@ -12,10 +12,10 @@ import { cn } from '@/lib/utils'
  * an empty search result): those describe media, and a music glyph says that
  * better than the product logo does.
  *
- * Served from `public/assets/logo.png`, so the path is stable in every build
+ * Served from `public/assets/openisai-logo.png`, so the path is stable in every build
  * and is precached by the service worker for offline use.
  */
-export const APP_LOGO_SRC = '/assets/logo.png'
+export const APP_LOGO_SRC = '/assets/openisai-logo.png'
 
 const SIZES = {
    xs: 'w-6 h-6 rounded-lg',
@@ -41,7 +41,7 @@ export default function AppLogo({
    size = 'md',
    className,
    glow = false,
-   alt = 'Rheoson',
+   alt = 'Songs',
 }: AppLogoProps) {
    return (
       <img

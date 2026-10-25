@@ -20,7 +20,7 @@ interface RouteSeo {
 }
 
 const ROUTE_SEO: Array<{ pattern: RegExp; seo: RouteSeo }> = [
-  { pattern: /^\/$/,             seo: { title: 'Rheoson — Feel the Beat. Self-hosted music streaming.' } },
+  { pattern: /^\/$/,             seo: { title: 'Songs' } },
   { pattern: /^\/landing/,       seo: { title: 'Rheoson — Your library, your server', path: '/landing' } },
   { pattern: /^\/search/,        seo: { title: 'Search — Rheoson', path: '/search' } },
   { pattern: /^\/library/,       seo: { title: 'Your Library — Rheoson', path: '/library' } },

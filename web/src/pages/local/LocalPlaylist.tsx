@@ -6,11 +6,10 @@ import { tracksApi } from "@/api/tracks.api";
 import { ArtworkImage } from "@/components/ui/ArtworkImage";
 import { useToast } from "@/components/ui/Toaster";
 import { useQueue } from "@/hooks/queue.hook";
-import { hasAudio, warmAudioCache } from "@/lib/audioCache";
 import { formatDuration } from "@/lib/formatters";
 import {
-   alreadyInDrive,
-   driveFileNames,
+   driveFileId,
+   driveFiles,
    driveFolder,
    extensionFor,
    fileBase,
@@ -26,8 +25,6 @@ import type { Playlist, Track } from "@/types";
 
 type SavePhase =
    | { kind: "idle" }
-   | { kind: "finding" }
-   | { kind: "saving"; done: number; total: number }
    | { kind: "exporting"; done: number; total: number; title: string };
 
 type Preview = {
@@ -62,6 +59,7 @@ export default function LocalPlaylist() {
    const { toast } = useToast();
    const { playTrack, playAll } = useQueue();
    const currentId = usePlayerStore((s) => s.currentTrack?.id ?? null);
+   const isPlaying = usePlayerStore((s) => s.isPlaying);
 
    const [url, setUrl] = useState("");
    const [phase, setPhase] = useState<SavePhase>({ kind: "idle" });
@@ -70,7 +68,6 @@ export default function LocalPlaylist() {
    const [preview, setPreview] = useState<Preview | null>(null);
    const [saved, setSaved] = useState<Playlist[]>([]);
    const [activeId, setActiveId] = useState<string | null>(null);
-   const [cached, setCached] = useState<Record<string, boolean>>({});
    const [showInstall, setShowInstall] = useState(false);
 
    const trimmed = url.trim();
@@ -107,7 +104,7 @@ export default function LocalPlaylist() {
       let cancelled = false;
       playlistsStore.getAll().then((rows) => {
          if (cancelled) return;
-         const local = rows.filter((row) => (row.tracks?.length ?? 0) > 0);
+         const local = rows.filter((row) => (row.tracks ?? []).some((track) => track.filePath?.startsWith("drive:")));
          setSaved(local);
          setActiveId((current) => current ?? local[0]?.id ?? null);
       }).catch(() => undefined);
@@ -115,22 +112,6 @@ export default function LocalPlaylist() {
          cancelled = true;
       };
    }, []);
-
-   useEffect(() => {
-      const tracks = active?.tracks ?? [];
-      if (tracks.length === 0) {
-         setCached({});
-         return;
-      }
-      let cancelled = false;
-      Promise.all(tracks.map(async (track) => [track.id, await hasAudio(track.id)] as const)).then((pairs) => {
-         if (cancelled) return;
-         setCached(Object.fromEntries(pairs));
-      }).catch(() => undefined);
-      return () => {
-         cancelled = true;
-      };
-   }, [active]);
 
    const remember = async (playlist: Playlist) => {
       await tracksStore.putAll(playlist.tracks);
@@ -168,65 +149,6 @@ export default function LocalPlaylist() {
       }
    };
 
-   const download = async () => {
-      if (phase.kind !== "idle" || !checked || !preview || !parsed) return;
-      setError("");
-      setPhase({ kind: "finding" });
-      try {
-         const resolved = await searchApi.resolve(url.trim());
-         const tracks = resolveToTracks(resolved);
-         const title = (resolved.type === "playlist" || resolved.type === "album") && resolved.title
-            ? resolved.title
-            : preview.title;
-         if (tracks.length === 0) {
-            setError("That playlist has no songs this page can read.");
-            return;
-         }
-
-         const existing = await playlistsStore.get(`spotify-${parsed.id}`);
-         const playlist = playlistFrom(parsed.id, title, tracks, existing?.createdAt);
-         await remember(playlist);
-
-         const needMb = Math.max(800, tracks.length * 12);
-         try {
-            const raw = localStorage.getItem("rheoson-audio-cache-limit-mb");
-            const current = raw ? Number(JSON.parse(raw)) : 300;
-            if (!Number.isFinite(current) || current < needMb) {
-               localStorage.setItem("rheoson-audio-cache-limit-mb", JSON.stringify(needMb));
-            }
-         } catch { /* keep the current ceiling */ }
-
-         await navigator.storage?.persist?.().catch(() => undefined);
-         await requestWakeLock();
-         setPhase({ kind: "saving", done: 0, total: tracks.length });
-
-         let savedCount = 0;
-         await Promise.all(tracks.map(async (track) => {
-            const ok = await warmAudioCache(track.id, tracksApi.getStreamUrl(track.id));
-            if (ok) {
-               savedCount += 1;
-               setCached((prev) => ({ ...prev, [track.id]: true }));
-            }
-            setPhase((prev) => prev.kind === "saving"
-               ? { kind: "saving", done: prev.done + 1, total: prev.total }
-               : prev);
-         }));
-         setPreview(null);
-         if (savedCount === tracks.length) {
-            toast(`${savedCount} songs are saved on this phone.`, "success", 5000);
-         } else {
-            toast(`Saved ${savedCount} of ${tracks.length} songs on this phone.`, savedCount ? "info" : "error", 5000);
-         }
-      } catch (err) {
-         const message = err instanceof Error ? err.message : "Could not save the playlist";
-         setError(message);
-         toast(message, "error", 4000);
-      } finally {
-         setPhase({ kind: "idle" });
-         void releaseWakeLock();
-      }
-   };
-
    const exportDrive = async () => {
       if (phase.kind !== "idle" || !checked || !preview || !parsed) return;
       if (!googleClientId()) {
@@ -239,47 +161,56 @@ export default function LocalPlaylist() {
          await googleAccessToken();
          const resolved = await searchApi.resolve(preview.url);
          const tracks = resolveToTracks(resolved);
+         const title = (resolved.type === "playlist" || resolved.type === "album") && resolved.title
+            ? resolved.title
+            : preview.title;
          if (tracks.length === 0) {
             setError("None of those songs could be matched for download.");
             return;
          }
-         const folderId = await driveFolder(preview.title, parsed.id);
-         const existing = await driveFileNames(folderId);
+         const folderId = await driveFolder(title, parsed.id);
+         const existing = await driveFiles(folderId);
          await requestWakeLock();
          let done = 0;
-         let uploaded = 0;
+         const savedTracks: Track[] = [];
          for (const track of tracks) {
             const base = fileBase(track.artist?.name || "", track.title);
-            if (alreadyInDrive(existing, base)) {
-               done += 1;
-               setPhase({ kind: "exporting", done, total: tracks.length, title: track.title });
-               continue;
-            }
             setPhase({ kind: "exporting", done, total: tracks.length, title: track.title });
-            const response = await fetch(tracksApi.getStreamUrl(track.id, { download: true, name: base }), {
-               headers: import.meta.env.VITE_APP_TOKEN
-                  ? { "X-App-Token": import.meta.env.VITE_APP_TOKEN }
-                  : {},
-            });
-            if (!response.ok) {
-               done += 1;
-               setPhase({ kind: "exporting", done, total: tracks.length, title: track.title });
-               continue;
+            let fileId = driveFileId(existing, base);
+            if (!fileId) {
+               try {
+                  const response = await fetch(tracksApi.getStreamUrl(track.id, { download: true, name: base }), {
+                     headers: import.meta.env.VITE_APP_TOKEN
+                        ? { "X-App-Token": import.meta.env.VITE_APP_TOKEN }
+                        : {},
+                  });
+                  if (!response.ok) throw new Error("skip");
+                  const blob = await response.blob();
+                  const filename = `${base}${extensionFor(blob.type || response.headers.get("content-type") || "")}`;
+                  fileId = await uploadToDrive(folderId, filename, blob);
+                  existing.set(filename, fileId);
+               } catch {
+                  done += 1;
+                  setPhase({ kind: "exporting", done, total: tracks.length, title: track.title });
+                  continue;
+               }
             }
-            const blob = await response.blob();
-            const filename = `${base}${extensionFor(blob.type || response.headers.get("content-type") || "")}`;
-            await uploadToDrive(folderId, filename, blob);
-            existing.add(filename);
-            uploaded += 1;
+            savedTracks.push({ ...track, filePath: `drive:${fileId}`, streamUrl: "" });
             done += 1;
             setPhase({ kind: "exporting", done, total: tracks.length, title: track.title });
          }
-         const skipped = done - uploaded;
+         if (savedTracks.length > 0) {
+            const previous = await playlistsStore.get(`spotify-${parsed.id}`);
+            const playlist = playlistFrom(parsed.id, title, savedTracks, previous?.createdAt);
+            playlist.artworkUrl = preview.artworkUrl || playlist.artworkUrl;
+            await remember(playlist);
+            setPreview(null);
+         }
          toast(
-            skipped
-               ? `Saved ${uploaded} songs to Drive. ${skipped} were already there.`
-               : `${uploaded} songs are in Google Drive.`,
-            uploaded ? "success" : "error",
+            savedTracks.length
+               ? `${savedTracks.length} songs are ready to play from Google Drive.`
+               : "No songs were saved to Drive.",
+            savedTracks.length ? "success" : "error",
             5000,
          );
       } catch (err) {
@@ -292,29 +223,26 @@ export default function LocalPlaylist() {
       }
    };
 
-   const buttonLabel = phase.kind === "finding"
-      ? "Finding the songs…"
-      : phase.kind === "saving"
-         ? `Saving songs on this phone… ${phase.done} of ${phase.total}`
-         : preview?.kind === "album"
-            ? "Download all the songs from that album."
-            : "Download all the songs from that playlist.";
    const driveLabel = phase.kind === "exporting"
       ? phase.title === "Finding the songs…"
          ? "Finding the songs…"
          : `Saving to Drive… ${phase.done} of ${phase.total}`
       : "Export to Google Drive";
-   const onPhone = Object.values(cached).filter(Boolean).length;
-   const saveRatio = (phase.kind === "saving" || phase.kind === "exporting") && phase.total > 0
+   const saveRatio = phase.kind === "exporting" && phase.total > 0
       ? phase.done / phase.total
       : 0;
+   const playable = (active?.tracks ?? []).filter((track) => track.filePath?.startsWith("drive:"));
 
    return (
       <div className="min-h-full bg-black text-white lg:grid lg:grid-cols-[340px_minmax(0,1fr)]" style={{ fontFamily: "Inter, system-ui, -apple-system, sans-serif" }}>
          <aside className="sticky top-0 hidden h-dvh flex-col overflow-y-auto bg-[#121212] px-3 py-4 lg:flex">
-            <h2 className="px-3 py-2 text-[16px] font-bold leading-[1.2]">On this phone</h2>
+            <div className="mb-3 flex items-center gap-3 px-2">
+               <img src="/assets/openisai-logo.png" alt="" className="h-10 w-10 rounded-full object-cover" />
+               <span className="text-[16px] font-bold leading-none">Songs</span>
+            </div>
+            <h2 className="px-3 py-2 text-[16px] font-bold leading-[1.2]">Your library</h2>
             {saved.length === 0 ? (
-               <p className="px-3 text-[13px] leading-snug text-[#b3b3b3]">Playlists land here after you download them.</p>
+               <p className="px-3 text-[13px] leading-snug text-[#b3b3b3]">Playlists land here after they are saved to Drive.</p>
             ) : (
                <ul className="mt-2 flex flex-col gap-1">
                   {saved.map((playlist) => (
@@ -325,10 +253,15 @@ export default function LocalPlaylist() {
          </aside>
 
          <div className="min-w-0 px-4 pb-8 pt-[max(16px,env(safe-area-inset-top))] lg:px-8 lg:pt-6">
-            <h1 className="text-[24px] font-bold leading-[1.2]">Save songs</h1>
-            <p className="mt-2 max-w-xl text-[14px] leading-[1.33] text-[#b3b3b3]">
-               Paste a Spotify playlist or album link, then check it to see the songs before they download.
-            </p>
+            <div className="flex items-center gap-3">
+               <img src="/assets/openisai-logo.png" alt="" className="h-11 w-11 rounded-full object-cover lg:hidden" />
+               <div className="min-w-0">
+                  <h1 className="text-[24px] font-bold leading-[1.2]">Songs</h1>
+                  <p className="mt-1 max-w-xl text-[14px] leading-[1.33] text-[#b3b3b3]">
+                     Paste a Spotify playlist or album, save it to your Drive, then play it here.
+                  </p>
+               </div>
+            </div>
 
             <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center">
                <label className="relative block min-w-0 flex-1">
@@ -381,13 +314,6 @@ export default function LocalPlaylist() {
                            className="inline-flex h-12 shrink-0 items-center justify-center rounded-full bg-white px-4 text-[14px] font-bold text-black disabled:opacity-60">
                            {driveLabel}
                         </button>
-                        <button
-                           type="button"
-                           onClick={download}
-                           disabled={phase.kind !== "idle"}
-                           className="inline-flex h-12 shrink-0 items-center justify-center rounded-full border border-[#333333] px-4 text-[14px] font-bold text-white disabled:opacity-60">
-                           {buttonLabel}
-                        </button>
                      </motion.div>
                   )}
                </AnimatePresence>
@@ -408,7 +334,7 @@ export default function LocalPlaylist() {
                </p>
             )}
 
-            {(phase.kind === "saving" || phase.kind === "exporting") && (
+            {(phase.kind === "exporting") && (
                <div className="mt-3">
                   <div className="h-1 overflow-hidden rounded-full bg-[#1f1f1f]">
                      <div className="h-full bg-[#1ed760] transition-[width] duration-300" style={{ width: `${Math.round(saveRatio * 100)}%` }} />
@@ -420,10 +346,30 @@ export default function LocalPlaylist() {
             )}
             {linkKind && !checked && (
                <p className="mt-2 max-w-xl text-[12px] leading-[1.33] text-[#b3b3b3]">
-                  Tap the check to load the songs. Nothing downloads until you confirm the list.
+                  Tap the check to load the songs. Nothing is saved until you confirm the list.
                </p>
             )}
             {error && <p className="mt-3 text-[13px] text-[#b85850]">{error}</p>}
+
+            {!checked && !active && !linkKind && (
+               <motion.div
+                  className="mt-16 flex flex-col items-center text-center"
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={rise}>
+                  <motion.img
+                     src="/assets/openisai-logo.png"
+                     alt=""
+                     className="h-28 w-28 rounded-full object-cover"
+                     animate={{ y: [0, -8, 0] }}
+                     transition={{ duration: 3.2, repeat: Infinity, ease: "easeInOut" }}
+                  />
+                  <p className="mt-6 text-[18px] font-bold">Your library starts here</p>
+                  <p className="mt-2 max-w-sm text-[14px] leading-[1.4] text-[#b3b3b3]">
+                     Check a link to see the songs, then save them into a folder in your own Google Drive.
+                  </p>
+               </motion.div>
+            )}
 
             {saved.length > 0 && (
                <ul className="mt-6 flex gap-3 overflow-x-auto lg:hidden">
@@ -458,11 +404,11 @@ export default function LocalPlaylist() {
                      artworkUrl={active.artworkUrl}
                      kind="playlist"
                      tracks={active.tracks}
-                     detail={`${onPhone} of ${active.tracks.length} songs on this phone`}
-                     onPlayAll={() => playAll(active.tracks)}
-                     onPlay={(track) => playTrack(track, active.tracks)}
+                     detail={`${playable.length} songs in Google Drive`}
+                     onPlayAll={playable.length ? () => playAll(playable) : undefined}
+                     onPlay={(track) => playTrack(track, playable)}
                      currentId={currentId}
-                     cached={cached}
+                     isPlaying={isPlaying}
                   />
                )}
             </AnimatePresence>
@@ -480,7 +426,7 @@ function SongList({
    onPlayAll,
    onPlay,
    currentId,
-   cached,
+   isPlaying,
 }: {
    title: string;
    artworkUrl: string;
@@ -490,7 +436,7 @@ function SongList({
    onPlayAll?: () => void;
    onPlay?: (track: Track) => void;
    currentId?: string | null;
-   cached?: Record<string, boolean>;
+   isPlaying?: boolean;
 }) {
    return (
       <motion.div
@@ -523,13 +469,22 @@ function SongList({
                const playing = track.id === currentId;
                const row = (
                   <>
-                     <span className={`text-right text-[14px] ${playing ? "text-[#1ed760]" : "text-[#b3b3b3]"}`}>{index + 1}</span>
+                     <span className={`flex items-end justify-end gap-[2px] text-right text-[14px] ${playing ? "text-[#1ed760]" : "text-[#b3b3b3]"}`}>
+                        {playing && isPlaying ? (
+                           <>
+                              <span className="eq-bar h-2" />
+                              <span className="eq-bar h-3" />
+                              <span className="eq-bar h-2" />
+                           </>
+                        ) : (
+                           index + 1
+                        )}
+                     </span>
                      <ArtworkImage src={track.artworkUrl} alt="" size={40} radius="rounded-md" className="h-10 w-10" />
                      <span className="min-w-0">
                         <span className={`block truncate text-[14px] font-semibold leading-[1.2] ${playing ? "text-[#1ed760]" : "text-white"}`}>{track.title}</span>
-                        <span className="mt-0.5 flex items-center gap-2 truncate text-[13px] text-[#b3b3b3]">
-                           {cached?.[track.id] && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#1ed760]" />}
-                           <span className="truncate">{track.artist?.name || "Unknown artist"}</span>
+                        <span className="mt-0.5 block truncate text-[13px] text-[#b3b3b3]">
+                           {track.artist?.name || "Unknown artist"}
                         </span>
                      </span>
                      <span className="text-[12px] text-[#b3b3b3]">{formatDuration(track.duration)}</span>

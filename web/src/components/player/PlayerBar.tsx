@@ -121,7 +121,7 @@ export default function PlayerBar() {
                      <div className='relative flex-shrink-0'>
                         <motion.img
                            key={currentTrack.artworkUrl}
-                           src={currentTrack.artworkUrl || "/assets/logo.png"}
+                           src={currentTrack.artworkUrl || "/assets/openisai-logo.png"}
                            alt={currentTrack.title}
                            className='w-12 h-12 rounded-md object-cover'
                            initial={{ opacity: 0, scale: 0.85 }}
@@ -129,7 +129,7 @@ export default function PlayerBar() {
                            transition={{ type: "spring", damping: 20 }}
                            onError={e => {
                               (e.target as HTMLImageElement).src =
-                                 "/assets/logo.png";
+                                 "/assets/openisai-logo.png";
                            }}
                         />
 
