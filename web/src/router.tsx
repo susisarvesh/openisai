@@ -20,6 +20,8 @@ import Blend from '@/pages/blend/Blend'
 import NotFound from '@/pages/errors/NotFound'
 import ErrorRedirect from '@/pages/errors/ErrorRedirect'
 import Account from '@/pages/account/Account'
+import PrivacyPolicy from '@/pages/legal/PrivacyPolicy'
+import TermsOfService from '@/pages/legal/TermsOfService'
 
 // Home section "See all" pages — these live under pages/home/components/
 // because they only exist as drill-downs from Home's sections, not as
@@ -64,6 +66,8 @@ export const routes = [
       { path: 'recently-played',  element: <RecentlyPlayed /> },
       { path: 'trending',         element: <Trending /> },
       { path: 'featured',         element: <Featured /> },
+      { path: 'privacy',          element: <PrivacyPolicy /> },
+      { path: 'terms',            element: <TermsOfService /> },
 
       // Catch-all — shows a custom 404 instead of a blank page
       { path: '*',                 element: <NotFound /> },

@@ -11,7 +11,7 @@ describe('applyRouteSeo', () => {
 
   it('home route sets the descriptive title and canonical with trailing slash', () => {
     applyRouteSeo('/')
-    expect(document.title).toContain('Feel the Beat')
+    expect(document.title).toBe('Songs')
     const link = document.head.querySelector('link[rel="canonical"]')
     expect(link?.getAttribute('href')).toBe(`${SITE_URL}/`)
   })
@@ -48,6 +48,28 @@ describe('applyRouteSeo', () => {
     expect(
       document.head.querySelector('meta[property="og:url"]')?.getAttribute('content')
     ).toBe(`${SITE_URL}/downloads`)
+  })
+
+  it('privacy and terms use the public site origin, title, and description', () => {
+    applyRouteSeo('/privacy')
+    expect(document.title).toBe('Privacy Policy — Save Songs')
+    expect(document.head.querySelector('link[rel="canonical"]')?.getAttribute('href')).toBe(
+      'https://save-songs.vercel.app/privacy'
+    )
+    expect(document.head.querySelector('meta[name="description"]')?.getAttribute('content')).toContain(
+      'Google Drive'
+    )
+
+    applyRouteSeo('/terms')
+    expect(document.title).toBe('Terms of Service — Save Songs')
+    expect(document.head.querySelector('meta[property="og:url"]')?.getAttribute('content')).toBe(
+      'https://save-songs.vercel.app/terms'
+    )
+
+    applyRouteSeo('/library')
+    expect(document.head.querySelector('link[rel="canonical"]')?.getAttribute('href')).toBe(
+      `${SITE_URL}/library`
+    )
   })
 
   it('is idempotent — re-running reuses the existing tags instead of duplicating them', () => {

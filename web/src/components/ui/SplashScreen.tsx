@@ -8,6 +8,8 @@ export function useSplash() {
   const [show, setShow] = useState(false)
 
   useEffect(() => {
+    const path = window.location.pathname
+    if (path === '/privacy' || path === '/terms') return
     const last = parseInt(localStorage.getItem(SPLASH_KEY) || '0', 10)
     const now = Date.now()
     if (now - last > COOLDOWN_MS) {

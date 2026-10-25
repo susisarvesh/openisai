@@ -10,7 +10,7 @@ export default defineConfig({
    test: {
       globals: true,
       environment: "jsdom",
-      setupFiles: [],
+      setupFiles: ["src/__tests__/setup.ts"],
       include: ["src/**/*.{test,spec}.{ts,tsx}"],
       // One fork at a time. The default pool fans out across workers, and on
       // Termux (where dev and CI-equivalent runs both happen on a phone) the

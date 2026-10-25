@@ -61,6 +61,14 @@ describe('auth route table', () => {
     }
   })
 
+  it('serves privacy and terms inside the public app layout', () => {
+    for (const path of ['/privacy', '/terms']) {
+      const matches = matchRoutes(routes, path)!
+      expect(matches[matches.length - 1].route.path).toBe(path.slice(1))
+      expect(matches[0].route.path).toBe('/')
+    }
+  })
+
   it('leaves the app catch-all as the last resort', () => {
     const matches = matchRoutes(routes, '/totally-unknown-page')!
     // The top-level catch-all wins for unknown paths.

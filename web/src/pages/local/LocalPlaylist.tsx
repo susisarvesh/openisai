@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Check, MagnifyingGlass, Play } from "@phosphor-icons/react";
 import { searchApi, resolveToTracks } from "@/api/search.api";
 import { tracksApi } from "@/api/tracks.api";
+import LegalLinks from "@/components/layout/LegalLinks";
 import { ArtworkImage } from "@/components/ui/ArtworkImage";
 import { useToast } from "@/components/ui/Toaster";
 import { useQueue } from "@/hooks/queue.hook";
@@ -260,6 +261,7 @@ export default function LocalPlaylist() {
                   <p className="mt-1 max-w-xl text-[14px] leading-[1.33] text-[#b3b3b3]">
                      Paste a Spotify playlist or album, save it to your Drive, then play it here.
                   </p>
+                  <LegalLinks className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-[#b3b3b3]" />
                </div>
             </div>
 
