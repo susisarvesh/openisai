@@ -75,3 +75,7 @@ music/**/*.flac
 music/**/*.wav
 music/.track_map.sqlite
 music/.cache/
+
+# Signing keys
+*.keystore
+*.jks
