@@ -84,12 +84,12 @@ export default function SplashScreen({ onDone }: SplashScreenProps) {
             <span className="eq-bar h-3" />
           </motion.div>
           <motion.p
-            className="mt-5 text-[13px] font-bold tracking-[0.28em] text-white"
+            className="mt-5 text-[12px] font-bold tracking-[0.16em] text-white"
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.55, duration: 0.45, ease: [0.32, 0.72, 0, 1] }}
           >
-            SONGS
+            SAVE SONGS
           </motion.p>
         </motion.button>
       )}

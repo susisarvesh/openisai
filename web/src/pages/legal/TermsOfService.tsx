@@ -25,7 +25,7 @@ export default function TermsOfService() {
             <p>
                Save Songs lets you paste a public Spotify playlist or album link, check the song list,
                and save matching audio files into a folder in your own Google Drive. You can then play
-               those files from Drive in the browser. The app is labeled Songs on the main screen.
+               those files from Drive in the browser.
             </p>
             <p>
                A check reads public information from Spotify&apos;s embed page. It does not save anything.

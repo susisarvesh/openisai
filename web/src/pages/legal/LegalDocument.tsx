@@ -23,7 +23,7 @@ export default function LegalDocument({
             <Link
                to="/"
                className="mt-4 inline-block text-[13px] text-[#b3b3b3] underline decoration-white/30 underline-offset-2 hover:text-white">
-               Back to Songs
+               Back to Save Songs
             </Link>
          </footer>
       </article>

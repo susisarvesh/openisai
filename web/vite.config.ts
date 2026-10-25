@@ -39,8 +39,8 @@ export default defineConfig({
          ],
 
          manifest: {
-            name: "Save songs",
-            short_name: "Songs",
+            name: "Save Songs",
+            short_name: "Save Songs",
             description:
                "Save a Spotify playlist or album on this phone, or export it to Google Drive.",
             theme_color: "#000000",

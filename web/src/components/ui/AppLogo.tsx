@@ -41,7 +41,7 @@ export default function AppLogo({
    size = 'md',
    className,
    glow = false,
-   alt = 'Songs',
+   alt = 'Save Songs',
 }: AppLogoProps) {
    return (
       <img

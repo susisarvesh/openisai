@@ -7,7 +7,7 @@ export default function PrivacyPolicy() {
       <LegalDocument title="Privacy Policy">
          <LegalSection id="what-this-is" heading="What Save Songs does">
             <p>
-               Save Songs is the website at {PUBLIC_SITE_ORIGIN}. In the app it is labeled Songs.
+               Save Songs is the website at {PUBLIC_SITE_ORIGIN}.
                You paste a public Spotify playlist or album link, check the song list, and can save
                those songs into a folder in your own Google Drive. After that, the site can play
                those files from your Drive.

@@ -23,7 +23,14 @@ interface RouteSeo {
 }
 
 const ROUTE_SEO: Array<{ pattern: RegExp; seo: RouteSeo }> = [
-  { pattern: /^\/$/,             seo: { title: 'Songs' } },
+  {
+    pattern: /^\/$/,
+    seo: {
+      title: 'Save Songs',
+      origin: 'https://save-songs.vercel.app',
+      description: 'Save Songs lets you paste a Spotify playlist or album, save the songs to your Google Drive, and play them.',
+    },
+  },
   { pattern: /^\/landing/,       seo: { title: 'Rheoson — Your library, your server', path: '/landing' } },
   { pattern: /^\/search/,        seo: { title: 'Search — Rheoson', path: '/search' } },
   { pattern: /^\/library/,       seo: { title: 'Your Library — Rheoson', path: '/library' } },

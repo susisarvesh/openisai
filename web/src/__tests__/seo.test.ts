@@ -11,9 +11,9 @@ describe('applyRouteSeo', () => {
 
   it('home route sets the descriptive title and canonical with trailing slash', () => {
     applyRouteSeo('/')
-    expect(document.title).toBe('Songs')
+    expect(document.title).toBe('Save Songs')
     const link = document.head.querySelector('link[rel="canonical"]')
-    expect(link?.getAttribute('href')).toBe(`${SITE_URL}/`)
+    expect(link?.getAttribute('href')).toBe('https://save-songs.vercel.app/')
   })
 
   it('known route sets its per-route title and canonical path', () => {

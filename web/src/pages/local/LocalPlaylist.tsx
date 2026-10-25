@@ -239,7 +239,7 @@ export default function LocalPlaylist() {
          <aside className="sticky top-0 hidden h-dvh flex-col overflow-y-auto bg-[#121212] px-3 py-4 lg:flex">
             <div className="mb-3 flex items-center gap-3 px-2">
                <img src="/assets/openisai-logo.png" alt="" className="h-10 w-10 rounded-full object-cover" />
-               <span className="text-[16px] font-bold leading-none">Songs</span>
+               <span className="text-[16px] font-bold leading-none">Save Songs</span>
             </div>
             <h2 className="px-3 py-2 text-[16px] font-bold leading-[1.2]">Your library</h2>
             {saved.length === 0 ? (
@@ -257,7 +257,7 @@ export default function LocalPlaylist() {
             <div className="flex items-center gap-3">
                <img src="/assets/openisai-logo.png" alt="" className="h-11 w-11 rounded-full object-cover lg:hidden" />
                <div className="min-w-0">
-                  <h1 className="text-[24px] font-bold leading-[1.2]">Songs</h1>
+                  <h1 className="text-[24px] font-bold leading-[1.2]">Save Songs</h1>
                   <p className="mt-1 max-w-xl text-[14px] leading-[1.33] text-[#b3b3b3]">
                      Paste a Spotify playlist or album, save it to your Drive, then play it here.
                   </p>
