@@ -1,0 +1,77 @@
+# Dependencies
+node_modules/
+venv/
+.venv/
+
+# Build outputs
+dist/
+build/
+graphify-out/
+*.egg-info/
+
+# Environment
+.env
+.env.local
+.env.*.local
+/.env.production
+# web/.env.production is tracked on purpose: it carries only non-secret
+# build defaults (public API origin + publishable key) so native/CI builds
+# can never ship a relative /api again. Real secrets stay in untracked
+# .env / .env.local files.
+!web/.env.production
+# VPS bind-mount payload — the whole library + user state lives here
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+dump.rdb
+
+# Logs
+*.log
+*.logs
+# Rotated application logs (rheoson.log.1 and friends) don't match *.log
+rheoson.log*
+music/*.json
+# Anchored: an unanchored `downloads/` also matches web/src/pages/downloads/,
+# which is the app's Downloads page source, not a build artefact.
+/downloads/
+
+# Local design references — screenshots kept on disk for reference only,
+# never shipped and never committed.
+reference/
+
+# Local scratch — personal notes, captured error output, ad-hoc logs.
+notes.txt
+*.err
+api.logs
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Vite
+web/.vite/
+
+# TypeScript
+tsconfig.tsbuildinfo
+music/.history.json
+graphify-out/cache/
+graphify-out/.graphify_*
+
+# Agent tooling (skills, prompts) is developer-local, like reference/ and notes.txt.
+.claude/
+.agent/
+ci-err.file.txt
+
+# Runtime media data — never commit the user's library or its caches
+music/**/*.mp3
+music/**/*.m4a
+music/**/*.mp4
+music/**/*.webm
+music/**/*.opus
+music/**/*.flac
+music/**/*.wav
+music/.track_map.sqlite
+music/.cache/
