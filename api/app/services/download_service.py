@@ -672,7 +672,7 @@ async def _run_download(
         # finished. Warnings are still silenced; the reporting is done by
         # _run_ytdlp_attempt, which filters the stream down to progress.
         cmd = [
-            toolchain.ytdlp_bin(), '--no-playlist', '--no-warnings', '--newline',
+            *toolchain.ytdlp_command(), '--no-playlist', '--no-warnings', '--newline',
             '--progress',
             '--retries', str(retries), '--fragment-retries', str(retries),
             '--format',
@@ -756,7 +756,7 @@ async def _run_download(
                 shutil.rmtree(staging, ignore_errors=True)
                 staging.mkdir(parents=True, exist_ok=True)
                 relay_cmd = [
-                    toolchain.ytdlp_bin(), '--no-warnings', '--newline', '--progress',
+                    *toolchain.ytdlp_command(), '--no-warnings', '--newline', '--progress',
                     '--format', 'bestaudio/best', '-o', out_tmpl,
                     '-x', '--audio-format', fmt, '--audio-quality', quality_q,
                     *toolchain.ffmpeg_location_args(),

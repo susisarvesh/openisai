@@ -62,9 +62,20 @@ def test_missing_downloader_is_reported_as_incapable(tmp_path, monkeypatch):
     monkeypatch.delenv("YTDLP_BIN", raising=False)
     monkeypatch.setenv("PATH", str(tmp_path))
     monkeypatch.setattr(toolchain, "_search_dirs", list)
+    monkeypatch.setattr(toolchain, "_module_available", lambda name: False)
     caps = toolchain.capabilities()
     assert caps["canDownload"] is False
     assert caps["ytdlp"]["present"] is False
+
+
+def test_installed_module_runs_when_the_script_is_hidden(tmp_path, monkeypatch):
+    """Vercel installs yt-dlp without putting the console script on PATH."""
+    monkeypatch.delenv("YTDLP_BIN", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setattr(toolchain, "_search_dirs", list)
+    monkeypatch.setattr(toolchain, "_module_available", lambda name: name == "yt_dlp")
+    assert toolchain.ytdlp_command() == [toolchain.sys.executable, "-m", "yt_dlp"]
+    assert toolchain.capabilities()["canDownload"] is True
 
 
 def test_ffmpeg_location_is_passed_only_when_resolved(tmp_path, monkeypatch):

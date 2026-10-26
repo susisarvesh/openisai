@@ -221,7 +221,7 @@ def resolve_direct_url_sync(track_id: str) -> Optional[str]:
 
     for extractor_args in client_attempts():
         cmd = [
-            toolchain.ytdlp_bin(), "--quiet", "--no-warnings", "--no-playlist",
+            *toolchain.ytdlp_command(), "--quiet", "--no-warnings", "--no-playlist",
             "-f", FORMAT_SELECTOR, "-g",
         ]
         for arg in extractor_args:

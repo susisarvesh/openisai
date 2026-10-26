@@ -24,6 +24,7 @@ after an install or an upgrade.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -71,31 +72,52 @@ def _search_dirs() -> list[Path]:
         Path("/bin"),
         Path("/opt/homebrew/bin"),
         Path("/snap/bin"),
+        # Vercel bundles installed packages under the task root and does not
+        # put their console scripts on PATH.
+        Path("/var/task/_vendor/bin"),
+        Path("/var/task/.vercel/python/bin"),
     ]
     return [c for c in candidates if c and str(c)]
 
 
+def _module_available(name: str) -> bool:
+    """True when ``name`` can be imported, even if its console script is hidden."""
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
+
+
 @dataclass(frozen=True)
 class Tool:
-    """A resolved external binary."""
+    """A resolved external binary, or a Python module that provides one."""
 
     name: str
     path: str | None
     env_var: str
+    module: str | None = None
 
     @property
     def available(self) -> bool:
-        return self.path is not None
+        return self.path is not None or self.module is not None
+
+    def command(self) -> list[str]:
+        """The argv prefix that runs this tool."""
+        if self.path:
+            return [self.path]
+        if self.module:
+            return [sys.executable, "-m", self.module]
+        return [self.name]
 
     @property
     def version(self) -> str | None:
         """First line of `<tool> --version`, or None when unavailable."""
-        if not self.path:
+        if not self.available:
             return None
-        args = [self.path, "--version"] if self.name == "yt-dlp" else [self.path, "-version"]
+        flag = "--version" if self.name == "yt-dlp" else "-version"
         try:
             res = subprocess.run(
-                args, capture_output=True, text=True, timeout=8, check=False
+                [*self.command(), flag], capture_output=True, text=True, timeout=8, check=False
             )
         except Exception:  # noqa: BLE001 — a probe failure is not fatal
             return None
@@ -127,6 +149,11 @@ def _resolve(name: str, env_var: str) -> Tool:
         except OSError:
             continue
 
+    # Vercel's Python function installs yt-dlp as a library and does not
+    # expose the console script. `python -m yt_dlp` is the same program.
+    if name == "yt-dlp" and _module_available("yt_dlp"):
+        return Tool(name, None, env_var, module="yt_dlp")
+
     return Tool(name, None, env_var)
 
 
@@ -156,6 +183,11 @@ def ffmpeg() -> Tool:
 def ytdlp_bin() -> str:
     """Path to ``yt-dlp``, or the bare name so a spawn fails visibly."""
     return ytdlp().path or "yt-dlp"
+
+
+def ytdlp_command() -> list[str]:
+    """Argv prefix for yt-dlp: the binary, or ``python -m yt_dlp``."""
+    return ytdlp().command()
 
 
 def ffmpeg_path() -> str | None:
@@ -334,7 +366,10 @@ def capabilities() -> dict:
     yt = ytdlp()
     ff = ffmpeg()
     return {
-        "ytdlp": {"present": yt.available, "path": yt.path},
+        "ytdlp": {
+            "present": yt.available,
+            "path": yt.path or ("python -m yt_dlp" if yt.module else None),
+        },
         "ffmpeg": {
             "present": ff.available,
             "path": ff.path,

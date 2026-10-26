@@ -998,7 +998,7 @@ async def _fill_buffer_ytdlp(track_id: str, dest: Path, on_mime=None) -> str:
     ]
     # Audio-only, m4a first — identical on every host, with or without ffmpeg.
     base_cmd = [
-        toolchain.ytdlp_bin(), "--quiet", "--no-warnings", "--no-playlist",
+        *toolchain.ytdlp_command(), "--quiet", "--no-warnings", "--no-playlist",
         "--format", stream_service.RAW_AUDIO_SELECTOR, "-o", "-",
     ]
 
@@ -1207,6 +1207,17 @@ async def _serve_session_stream(track_id: str, session: dict) -> Response:  # no
         except (GeneratorExit, ConnectionResetError, BrokenPipeError):
             # Client went away — the fill task keeps running in the background
             return
+
+    if session["done"].is_set():
+        try:
+            ready = path.exists() and path.stat().st_size > 0
+        except OSError:
+            ready = False
+        if not ready:
+            # The fill already failed. Raising here, before the response
+            # starts, is a real 502. Raising inside the generator is what
+            # turned this into "response already started" on the host.
+            raise error_codes.fail(error_codes.STREAM.WARMUP_FAILED, 502)
 
     return StreamingResponse(
         _gen(),
