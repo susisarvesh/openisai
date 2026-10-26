@@ -1,6 +1,5 @@
 const SCOPE = "https://www.googleapis.com/auth/drive.file";
 const MANIFEST_NAME = "save-songs.json";
-const DRIVE_MEDIA = "/drive-media/";
 
 export interface DriveSong {
    title: string;
@@ -79,8 +78,79 @@ let accessToken = "";
 let tokenExpires = 0;
 let signedIn = false;
 
+const SESSION_KEY = "rheoson-google-session";
+const GRANTED_KEY = "rheoson-google-granted";
+
+function restoreSession(): void {
+   try {
+      const raw = sessionStorage.getItem(SESSION_KEY);
+      if (raw) {
+         const parsed = JSON.parse(raw) as { token?: string; expires?: number };
+         if (parsed.token && parsed.expires && Date.now() < parsed.expires - 60_000) {
+            accessToken = parsed.token;
+            tokenExpires = parsed.expires;
+            signedIn = true;
+            forgetPlaybackToken();
+            return;
+         }
+         sessionStorage.removeItem(SESSION_KEY);
+      }
+   } catch { /* private mode */ }
+   forgetPlaybackToken();
+}
+
+function persistSession(token: string, expires: number): void {
+   accessToken = token;
+   tokenExpires = expires;
+   signedIn = true;
+   try {
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify({ token, expires }));
+      localStorage.setItem(GRANTED_KEY, "1");
+   } catch { /* private mode */ }
+}
+
+function alreadyGranted(): boolean {
+   try { return localStorage.getItem(GRANTED_KEY) === "1"; } catch { return false; }
+}
+
+restoreSession();
+
 export function isGoogleSignedIn(): boolean {
    return signedIn && !!accessToken && Date.now() < tokenExpires - 60_000;
+}
+
+export function googleTokenExpirySeconds(): number | null {
+   if (!tokenExpires) return null;
+   return Math.floor(tokenExpires / 1000);
+}
+
+/** Drop a token Drive rejected. The next request asks Google for a new one. */
+export function dropGoogleAccessToken(): void {
+   accessToken = "";
+   tokenExpires = 0;
+   signedIn = false;
+   try { sessionStorage.removeItem(SESSION_KEY); } catch { /* private mode */ }
+}
+
+/** Delete only the playback token left in IndexedDB by an older build. */
+function forgetPlaybackToken(): void {
+   if (typeof indexedDB === "undefined" || typeof indexedDB.databases !== "function") return;
+   void indexedDB.databases().then((dbs) => {
+      if (!dbs.some((db) => db.name === "rheoson-drive")) return;
+      const open = indexedDB.open("rheoson-drive");
+      open.onsuccess = () => {
+         const db = open.result;
+         if (!db.objectStoreNames.contains("session")) {
+            db.close();
+            return;
+         }
+         const tx = db.transaction("session", "readwrite");
+         tx.objectStore("session").delete("google");
+         tx.oncomplete = () => db.close();
+         tx.onerror = () => db.close();
+      };
+      open.onerror = () => undefined;
+   }).catch(() => undefined);
 }
 
 export async function googleAccessToken(): Promise<string> {
@@ -102,11 +172,11 @@ export async function googleAccessToken(): Promise<string> {
                return;
             }
             tokenExpires = Date.now() + (response.expires_in ?? 3600) * 1000;
-            signedIn = true;
+            persistSession(response.access_token, tokenExpires);
             resolve(response.access_token);
          },
       });
-      client.requestAccessToken({ prompt: signedIn ? "" : "consent" });
+      client.requestAccessToken({ prompt: signedIn || alreadyGranted() ? "" : "consent" });
    });
    return accessToken;
 }
@@ -145,14 +215,25 @@ export async function driveFolder(name: string, key: string): Promise<string> {
    return folder.id;
 }
 
-export async function driveFiles(folderId: string): Promise<Map<string, string>> {
-   const files = new Map<string, string>();
+export interface DriveStoredFile {
+   id: string;
+   bytes: number | null;
+}
+
+function storedBytes(value: unknown): number | null {
+   if (typeof value === "number" && Number.isFinite(value)) return value;
+   if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) return Number(value);
+   return null;
+}
+
+export async function driveFiles(folderId: string): Promise<Map<string, DriveStoredFile>> {
+   const files = new Map<string, DriveStoredFile>();
    let pageToken = "";
    const safeId = folderId.replace(/'/g, "\\'");
    do {
       const params = new URLSearchParams({
          q: `'${safeId}' in parents and trashed=false`,
-         fields: "nextPageToken,files(id,name)",
+         fields: "nextPageToken,files(id,name,size)",
          pageSize: "1000",
       });
       if (pageToken) params.set("pageToken", pageToken);
@@ -160,20 +241,31 @@ export async function driveFiles(folderId: string): Promise<Map<string, string>>
          headers: await authHeader(),
       });
       if (!res.ok) throw new Error("Could not read the Drive folder");
-      const body = await res.json() as { nextPageToken?: string; files?: { id?: string; name?: string }[] };
+      const body = await res.json() as {
+         nextPageToken?: string;
+         files?: { id?: string; name?: string; size?: string }[];
+      };
       for (const file of body.files ?? []) {
-         if (file.id && file.name) files.set(file.name, file.id);
+         if (file.id && file.name) files.set(file.name, { id: file.id, bytes: storedBytes(file.size) });
       }
       pageToken = body.nextPageToken ?? "";
    } while (pageToken);
    return files;
 }
 
-export function driveFileId(files: Map<string, string>, base: string): string | undefined {
-   for (const [name, id] of files) {
-      if (name === base || name.startsWith(`${base}.`)) return id;
+export function driveFileId(files: Map<string, DriveStoredFile>, base: string): DriveStoredFile | undefined {
+   for (const [name, file] of files) {
+      if (name === base || name.startsWith(`${base}.`)) return file;
    }
    return undefined;
+}
+
+export async function removeDriveFile(fileId: string): Promise<void> {
+   const res = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`, {
+      method: "DELETE",
+      headers: await authHeader(),
+   });
+   if (!res.ok && res.status !== 404) throw new Error("Could not replace the empty Drive file");
 }
 
 async function folderStillThere(folderId: string): Promise<boolean> {
@@ -229,7 +321,7 @@ export async function tagFolder(folderId: string, spotifyId: string): Promise<vo
 
 export async function writePlaylistManifest(folderId: string, manifest: DrivePlaylistFile): Promise<void> {
    const files = await driveFiles(folderId);
-   const existingId = files.get(MANIFEST_NAME);
+   const existingId = files.get(MANIFEST_NAME)?.id;
    const body = JSON.stringify(manifest);
    if (existingId) {
       const res = await fetch(
@@ -324,12 +416,12 @@ export async function loadSharedLibrary(): Promise<SharedPlaylist[]> {
    const playlists: SharedPlaylist[] = [];
    for (const folder of folders) {
       const files = await driveFiles(folder.id);
-      const markerId = files.get(MANIFEST_NAME);
+      const markerId = files.get(MANIFEST_NAME)?.id;
       let manifest = markerId ? await readPlaylistManifest(folder.id, markerId) : null;
       if (!manifest) {
          const tracks: DriveSong[] = [];
-         for (const [name, id] of files) {
-            const song = songFromFilename(name, id);
+         for (const [name, file] of files) {
+            const song = songFromFilename(name, file.id);
             if (song) tracks.push(song);
          }
          if (tracks.length === 0) continue;
@@ -356,41 +448,31 @@ export async function loadSharedLibrary(): Promise<SharedPlaylist[]> {
    return playlists;
 }
 
-/** Tell the service worker the current token, then return a same-origin URL it can stream. */
-export async function prepareDrivePlayback(fileId: string): Promise<string> {
-   const token = await googleAccessToken();
-   if (!("serviceWorker" in navigator)) {
-      throw new Error("This browser cannot stream Drive audio");
-   }
-   const worker = await controllingWorker();
-   await new Promise<void>((resolve, reject) => {
-      const channel = new MessageChannel();
-      const timer = window.setTimeout(() => reject(new Error("Drive playback did not start")), 4000);
-      channel.port1.onmessage = () => {
-         window.clearTimeout(timer);
-         resolve();
-      };
-      worker.postMessage({ type: "DRIVE_TOKEN", token }, [channel.port2]);
-   });
-   return `${DRIVE_MEDIA}${encodeURIComponent(fileId)}`;
-}
-
-function controllingWorker(): Promise<ServiceWorker> {
+function putDriveBytes(location: string, blob: Blob, type: string): Promise<{ id?: string }> {
+   const last = blob.size - 1;
    return new Promise((resolve, reject) => {
-      const timer = window.setTimeout(() => reject(new Error("Reload the page, then play the song again")), 8000);
-      const finish = () => {
-         const worker = navigator.serviceWorker.controller;
-         if (!worker) return;
-         window.clearTimeout(timer);
-         resolve(worker);
+      const xhr = new XMLHttpRequest();
+      xhr.open("PUT", location);
+      xhr.setRequestHeader("Content-Type", type);
+      xhr.setRequestHeader("Content-Range", `bytes 0-${last}/${blob.size}`);
+      xhr.onload = () => {
+         if (xhr.status < 200 || xhr.status >= 300) {
+            reject(new Error("Drive upload failed"));
+            return;
+         }
+         try {
+            resolve(JSON.parse(xhr.responseText) as { id?: string });
+         } catch {
+            reject(new Error("Drive upload failed"));
+         }
       };
-      finish();
-      navigator.serviceWorker.ready.then(finish).catch(() => undefined);
-      navigator.serviceWorker.addEventListener("controllerchange", finish, { once: true });
+      xhr.onerror = () => reject(new Error("Drive upload failed"));
+      xhr.send(blob);
    });
 }
 
 export async function uploadToDrive(folderId: string, name: string, blob: Blob): Promise<string> {
+   if (blob.size < 1) throw new Error("The download was empty");
    const type = blob.type || "application/octet-stream";
    const start = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable", {
       method: "POST",
@@ -404,14 +486,20 @@ export async function uploadToDrive(folderId: string, name: string, blob: Blob):
    });
    const location = start.headers.get("Location");
    if (!start.ok || !location) throw new Error("Drive did not accept the file");
-   const put = await fetch(location, {
-      method: "PUT",
-      headers: { "Content-Type": type },
-      body: blob,
-   });
-   if (!put.ok) throw new Error("Drive upload failed");
-   const created = await put.json() as { id?: string };
+   const created = await putDriveBytes(location, blob, type);
    if (!created.id) throw new Error("Drive upload failed");
+   const meta = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(created.id)}?fields=size`,
+      { headers: await authHeader() },
+   );
+   if (meta.ok) {
+      const body = await meta.json() as { size?: string };
+      const bytes = storedBytes(body.size);
+      if (bytes === null || bytes < 1) {
+         await removeDriveFile(created.id).catch(() => undefined);
+         throw new Error("Drive stored an empty file");
+      }
+   }
    return created.id;
 }
 

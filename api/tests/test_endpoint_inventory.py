@@ -31,6 +31,9 @@ PUBLIC_MUTATING = {
     ("POST", "/api/webhooks/clerk"),
     ("POST", "/api/search/resolve"),
     ("POST", "/api/stream/{track_id}/warm"),
+    # Drive playback has no Save Songs account. The Google token is the
+    # credential, carried in a header and exchanged for a short-lived grant.
+    ("POST", "/api/drive-audio/grant"),
 }
 
 # GET routes whose handler performs real network/library work with dummy

@@ -9,6 +9,7 @@ import { haptic } from '@/lib/haptics';
 import { getLocalFileUrl } from '@/lib/localFs';
 import { isNativePlatform } from '@/lib/capacitor';
 import { ensureEffectsChain } from '@/lib/audioEffects';
+import { drivePlaybackUrl } from '@/lib/playback/driveGrant';
 import { prefetchQueue } from '@/lib/prefetch';
 import { getCachedObjectUrl, mimeToExt, warmAudioCache } from '@/lib/audioCache';
 
@@ -45,6 +46,30 @@ import type { Track } from '@/types';
 // actions target the same Howl, never accidentally spawning a second one.
 
 let _howl: Howl | null = null;
+let _driveAbort: AbortController | null = null;
+// Set when play is pressed while this track's Drive download is still running.
+// Starting a second download would abort the first and revoke its blob URL.
+let _playWhenReady = false;
+
+function _resumePlaybackContext(): void {
+    const ctx = Howler.ctx;
+    if (ctx && ctx.state === 'suspended') void ctx.resume();
+}
+
+/** Play after a suspended context has resumed, so play() is not rejected early. */
+function _playHowl(): void {
+    const ctx = Howler.ctx;
+    if (ctx && ctx.state === 'suspended') {
+        void ctx.resume().then(() => _howl?.play());
+        return;
+    }
+    _howl?.play();
+}
+
+/** True while this track is downloading and no Howl exists yet. */
+function _awaitingSameTrack(trackId: string | undefined): boolean {
+    return !!trackId && _loadedId === trackId && !_howl && !_howlFailed;
+}
 
 // Playback speed. Applied to every Howl we build and re-applied on load, so
 // it survives track changes. Persisted alongside the other rheoson-* prefs.
@@ -189,6 +214,8 @@ function _startTimer(
 
 function _destroy() {
     _stopTimer();
+    _driveAbort?.abort();
+    _driveAbort = null;
     // Invalidate any in-flight callbacks from the Howl being destroyed.
     _generation++;
     if (_howl) {
@@ -204,6 +231,7 @@ function _destroy() {
     _loadedId = null;
     _loadedFormat = undefined;
     _howlFailed = false;
+    _playWhenReady = false;
 }
 
 // ── Resolve stream URL ────────────────────────────────────────
@@ -218,11 +246,14 @@ async function _resolveUrl(track: {
     id: string;
     filePath?: string;
     isDownloaded?: boolean;
-}): Promise<{ url: string; fromCache: boolean; format: string[] }> {
-    // A saved song is a Drive file id, not audio stored on this device.
+}): Promise<{ url: string; fromCache: boolean; format: string[]; webAudio?: boolean }> {
     if (track.filePath?.startsWith("drive:")) {
-        const { prepareDrivePlayback } = await import("@/lib/googleDrive");
-        const url = await prepareDrivePlayback(track.filePath.slice("drive:".length));
+        _driveAbort?.abort();
+        _driveAbort = new AbortController();
+        const url = await drivePlaybackUrl(
+            track.filePath.slice("drive:".length),
+            _driveAbort.signal,
+        );
         return { url, fromCache: true, format: _safeFormat("m4a") };
     }
 
@@ -353,6 +384,7 @@ export function usePlayer() {
             autoplay: boolean = true,
             seekTo: number = 0
         ) => {
+            _resumePlaybackContext();
             // Same track already loaded — reuse the existing Howl.
             // This is the other half of the double-play prevention: if the track is
             // already loaded we never build a second instance.
@@ -379,9 +411,9 @@ export function usePlayer() {
             // the active track's events are honored.
             const gen = _generation;
 
-            // Resolve the URL asynchronously — may need to check local filesystem
             const track = usePlayerStore.getState().currentTrack;
-            const urlPromise: Promise<{ url: string; fromCache: boolean; format: string[] }> = track
+            // Resolve the URL asynchronously — may need to check local filesystem
+            const urlPromise: Promise<{ url: string; fromCache: boolean; format: string[]; webAudio?: boolean }> = track
                 ? _resolveUrl(track)
                 : Promise.resolve({
                       url: tracksApi.getStreamUrl(trackId),
@@ -393,12 +425,15 @@ export function usePlayer() {
                 // Generation may have moved on while resolving
                 if (gen !== _generation) return;
 
-            const url = resolved.url;
-            _howlFailed = false; // fresh build — optimism until proven otherwise
-            _loadedFormat = resolved.format;
-            _howl = new Howl({
+                const url = resolved.url;
+                let triedElement = false;
+
+                const mount = (html5: boolean) => {
+                _howlFailed = false;
+                _loadedFormat = resolved.format;
+                _howl = new Howl({
                 src: [url],
-                html5: true,
+                html5,
                 format: _loadedFormat,
                 volume: volRef.current,
                 preload: true,
@@ -422,7 +457,17 @@ export function usePlayer() {
                         _howl?.seek(seekTo);
                         setProgress(seekTo);
                     }
-                    if (autoplay) _howl?.play();
+                    const shouldStart = autoplay || _playWhenReady;
+                    _playWhenReady = false;
+                    if (!shouldStart) return;
+                    const ctx = Howler.ctx;
+                    if (ctx && ctx.state === 'suspended') {
+                        void ctx.resume().then(() => {
+                            if (gen === _generation) _howl?.play();
+                        });
+                        return;
+                    }
+                    _howl?.play();
                 },
 
                 onplay() {
@@ -499,6 +544,18 @@ export function usePlayer() {
                 },
 
                 onloaderror(_id, err) {
+                    if (gen !== _generation) return;
+                    const errStr = String(err ?? '');
+                    // Web Audio could not decode this file. Try the audio element
+                    // once, against the same blob, without downloading again.
+                    if (!html5 && !triedElement && /decod/i.test(errStr)) {
+                        triedElement = true;
+                        _howl?.off();
+                        _howl?.unload();
+                        _howl = null;
+                        mount(true);
+                        return;
+                    }
                     console.error('[Rheoson] load error', { trackId, url, err });
                     _howlFailed = true;
                     setLoading(false);
@@ -509,15 +566,16 @@ export function usePlayer() {
                     // plays" loop. togglePlay's rebuild path handles the
                     // actual retry when the user asks for it.
                     let message = 'Could not load this track';
-                    const errStr = String(err);
                     if (errStr.includes('404') || errStr.includes('Not Found')) {
                         message = 'Track not found — it may have been removed';
                     } else if (errStr.includes('403') || errStr.includes('Forbidden')) {
                         message = 'Access denied — this track may be region-locked';
                     } else if (errStr.includes('Network') || errStr.includes('Failed to fetch')) {
                         message = 'Network error — check your connection';
-                    } else if (errStr.includes('decode') || errStr.includes('DECODE')) {
-                        message = 'Audio format not supported — trying alternative stream…';
+                    } else if (/decod/i.test(errStr)) {
+                        message = resolved.webAudio
+                            ? 'Could not play that downloaded song'
+                            : 'Audio format not supported — trying alternative stream…';
                     }
                     window.dispatchEvent(
                         new CustomEvent('rheoson:play-error', {
@@ -530,22 +588,28 @@ export function usePlayer() {
                     console.error('[Rheoson] play error', { trackId, err });
                     // A play error poisons the Howl — recover by destroying it
                     // and rebuilding from the saved position on the next tap.
+                    // A Drive blob stays. Destroying it revokes the URL while
+                    // the element is still requesting it, which is the red
+                    // blob row with Range: bytes=0- and no response headers.
                     const savedPos = usePlayerStore.getState().savedProgress;
-                    // Try AudioContext resume first (Android user-gesture lock)
+                    const keepBytes = !!resolved.webAudio;
                     if (Howler.ctx?.state === 'suspended') {
                         Howler.ctx
                             .resume()
                             .then(() => {
                                 if (gen === _generation && _howl) {
                                     _howl.play();
-                                } else {
-                                    // Generation moved on — rebuild
+                                } else if (!keepBytes) {
                                     _destroy();
                                     setLoading(false);
                                 }
                             })
                             .catch(() => {
-                                // AudioContext resume failed — rebuild Howl
+                                if (keepBytes) {
+                                    setLoading(false);
+                                    setPlaying(false);
+                                    return;
+                                }
                                 _destroy();
                                 setLoading(false);
                                 _loadedId = null;
@@ -555,6 +619,16 @@ export function usePlayer() {
                                     })
                                 );
                             });
+                        return;
+                    }
+                    if (keepBytes) {
+                        setLoading(false);
+                        setPlaying(false);
+                        window.dispatchEvent(
+                            new CustomEvent('rheoson:play-error', {
+                                detail: { trackId, error: 'Tap play again', savedPos },
+                            })
+                        );
                         return;
                     }
                     // Non-AudioContext error — try one rebuild from saved position
@@ -578,8 +652,12 @@ export function usePlayer() {
                     );
                 }
             });
+                };
+
+                mount(!resolved.webAudio);
             }).catch((err: unknown) => {
                 if (gen !== _generation) return;
+                if (err instanceof DOMException && err.name === "AbortError") return;
                 setLoading(false);
                 setPlaying(false);
                 _loadedId = null;
@@ -647,8 +725,11 @@ export function usePlayer() {
     // ── Public API ─────────────────────────────────────────────
 
     const play = useCallback(() => {
+        _resumePlaybackContext();
         if (_howl && _loadedId != null && !_howlFailed) {
-            _howl.play();
+            _playHowl();
+        } else if (_awaitingSameTrack(currentTrack?.id)) {
+            _playWhenReady = true;
         } else if (currentTrack) {
             // No Howl, or a Howl in a failed state — rebuild once and start.
             // Poking a failed Howl with play() does nothing, which read to
@@ -663,10 +744,13 @@ export function usePlayer() {
     }, []);
 
     const togglePlay = useCallback(() => {
+        _resumePlaybackContext();
         if (_howl?.playing()) {
             _howl.pause();
         } else if (_howl && _loadedId != null && !_howlFailed) {
-            _howl.play();
+            _playHowl();
+        } else if (_awaitingSameTrack(currentTrack?.id)) {
+            _playWhenReady = true;
         } else if (currentTrack) {
             // No usable Howl (never loaded, or destroyed after an error) —
             // rebuild it and start playing from the saved position.
@@ -692,7 +776,9 @@ export function usePlayer() {
                 _howl.seek(savedProgress);
                 setProgress(savedProgress);
             }
-            _howl.play();
+            _playHowl();
+        } else if (_awaitingSameTrack(currentTrack.id)) {
+            _playWhenReady = true;
         } else {
             loadAndPlay(currentTrack.id, false, true, savedProgress);
         }

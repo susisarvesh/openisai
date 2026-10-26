@@ -49,6 +49,7 @@ from app.routers import (
 from app.routers import equalizer_router, share_router, analytics_router, smart_playlist_router, clerk_webhook_router
 from app.routers import artist_router
 from app.routers import messaging_router, blends_router
+from app.routers import drive_audio_router
 
 configure_logging()
 log = structlog.get_logger()
@@ -492,7 +493,8 @@ app.add_middleware(RateLimitMiddleware, limits={
     "/api/search":    settings.RATE_LIMIT_SEARCH,
     "/api/downloads": settings.RATE_LIMIT_DOWNLOAD,
     "/api/auth":      settings.RATE_LIMIT_AUTH,
-    "/api/stream":    settings.RATE_LIMIT_STREAM,
+    "/api/stream":      settings.RATE_LIMIT_STREAM,
+    "/api/drive-audio": settings.RATE_LIMIT_STREAM,
     "/api/lyrics":    settings.RATE_LIMIT_LYRICS,
 })
 
@@ -533,6 +535,7 @@ app.include_router(search.router,          prefix="/api/search",    tags=["searc
 app.include_router(tracks.router,          prefix="/api/tracks",    tags=["tracks"])
 app.include_router(downloads.router,       prefix="/api/downloads", tags=["downloads"])
 app.include_router(stream.router,          prefix="/api/stream",    tags=["stream"])
+app.include_router(drive_audio_router.router, prefix="/api/drive-audio", tags=["drive-audio"])
 app.include_router(lyrics.router,          prefix="/api/lyrics",    tags=["lyrics"])
 app.include_router(playlists.router,       prefix="/api/playlists", tags=["playlists"])
 app.include_router(settings_router.router, prefix="/api/settings",  tags=["settings"])

@@ -47,20 +47,23 @@ export default function PrivacyPolicy() {
             <p>
                The public OAuth client id is built into the website from the{" "}
                <code>VITE_GOOGLE_CLIENT_ID</code> setting. There is no Google client secret in the website.
-               The first time you sign in or export in a browser tab, Google asks you to choose an account
-               and consent. Later actions in that same tab can reuse the session Google already granted.
-               The token client does not store a refresh token, so a new visit asks you to sign in again.
+               The first time you sign in in a browser, Google asks you to choose an account and consent.
+               A reload of that tab keeps the access token for as long as Google says it is valid, so
+               Google is not asked again. The token client does not store a refresh token. Closing the
+               tab, or waiting until the token expires, asks you to sign in again.
             </p>
             <p>
-               Google returns an access token and an expiry time. The website keeps both in memory for that
-               tab. It does not write the token to local storage, IndexedDB, or a cookie, and it does not
-               send the token to the Save Songs server. The page also sends the current token to this
-               site&apos;s service worker, in memory, so playback can start. The service worker sends that
-               token only to Google, and the token is not placed in the audio URL. The token is sent as a
-               bearer credential on requests to <span className="break-all">https://www.googleapis.com</span> and{" "}
-               <span className="break-all">https://www.googleapis.com/upload/drive</span>. When the token
-               expires, or you close the tab, the website no longer has it. Signing in, exporting, or
-               pressing play asks Google for a token again.
+               Google returns an access token and an expiry time. The website keeps both in memory and in
+               session storage for that tab, so a reload can keep playing without another Google prompt.
+               It does not write the token to local storage, IndexedDB, or a cookie. The token is not
+               placed in the audio URL. The token is sent as a bearer credential on requests to{" "}
+               <span className="break-all">https://www.googleapis.com</span> and{" "}
+               <span className="break-all">https://www.googleapis.com/upload/drive</span>. When you press play,
+               the page also sends that token to the Save Songs API in a header, so the API can read that
+               one Drive file. The API does not store the token and does not write it to a log. The audio
+               URL carries a short-lived encrypted grant instead of the token. When the token
+               expires, or you close the tab, the website removes it. The next sign-in, export, or play
+               asks Google for a token again.
             </p>
          </LegalSection>
 
@@ -75,7 +78,7 @@ export default function PrivacyPolicy() {
                <li>Lists the files in that folder. The request asks only for each file&apos;s id and name, and skips trashed files.</li>
                <li>Uploads an audio file for a song that is not already in the folder. The upload creates a new file. It does not replace a file that is already there. A song that fails to upload is skipped.</li>
                <li>Writes or replaces <code>save-songs.json</code> in that folder so the playlist list matches the files that were saved.</li>
-               <li>When you press play, asks this site&apos;s service worker to stream that file from Drive. The worker sends the token and the browser&apos;s range header to Google and returns the response as a stream, so playback can start before the whole file has downloaded. The audio is not written into the on-device library database, and that stream is not stored in the audio cache.</li>
+               <li>When you press play, the page asks the Save Songs API to read that one audio file from Drive and play it. The API streams Drive&apos;s response. The audio is not stored in the on-device library database. Pressing play again asks Drive for the file again.</li>
             </ul>
             <p>
                The folder id is also stored on this device under a local storage key that starts with{" "}
@@ -102,15 +105,14 @@ export default function PrivacyPolicy() {
                   the Add to Home Screen hint (<code>rheoson-ios-install-hint</code>).
                </li>
                <li>
-                  The Google access token, only in memory, as described above.
+                  The Google access token, in memory and in session storage for this tab, as described above.
                </li>
             </ul>
             <p>
                The service worker can cache the audio response it receives from the Save Songs API while a
                song is being saved. That cache is named <code>rheoson-audio-v2</code>, holds at most 200
-               files, and keeps an entry for up to 90 days, on this device. Playback from Drive uses a
-               same-origin address that starts with <code>/drive-media/</code>. The service worker forwards
-               that request to Google and does not put it in <code>rheoson-audio-v2</code>. The service worker
+               files, and keeps an entry for up to 90 days, on this device. Playback from Drive goes through
+               the Save Songs API and is not put in <code>rheoson-audio-v2</code>. The service worker
                also caches the website&apos;s own files so the page can load again, and it can cache some API
                responses from older parts of the same website.
             </p>
@@ -126,7 +128,13 @@ export default function PrivacyPolicy() {
                <li>
                   A request for each song&apos;s audio (<code>/api/stream/…/audio</code>), including the
                   track id and the file name the website wants to use. Your browser then uploads those
-                  bytes to your Drive. The Google token is not part of this request.
+                  bytes to your Drive. The Google token is not part of this save request.
+               </li>
+               <li>
+                  When you press play on a saved song, the page sends the Google access token in a header
+                  on <code>/api/drive-audio/grant</code>, then requests the audio for that file. The API
+                  uses the token to read that file from Drive and does not store it. The audio address
+                  contains a short-lived encrypted grant, not the token.
                </li>
                <li>
                   An application token that is the same for every visitor and is embedded in the website
@@ -135,7 +143,8 @@ export default function PrivacyPolicy() {
                </li>
             </ul>
             <p>
-               The API does not receive your Google access token or the contents of your Drive. The main
+               The API receives your Google access token only when you press play, and only so it can read
+               that one file. It streams the audio and does not store the token or the file. The main
                screen does not send the library to a database. Authentication on the API is turned off by
                default, and this screen does not create a user record.
             </p>
@@ -188,7 +197,7 @@ export default function PrivacyPolicy() {
          <LegalSection id="sharing" heading="Who else receives information">
             <p>These services are involved when you use the main screen:</p>
             <ul className="list-disc space-y-2 pl-5">
-               <li>Google, for the consent screen, the access token, and Drive file operations. Drive requests go from your browser to Google.</li>
+               <li>Google, for the consent screen, the access token, and Drive file operations. Listing and uploading still go from your browser to Google. Playing a saved song goes from the Save Songs API to Google.</li>
                <li>Spotify, because the API reads the public embed page for the link you pasted. You do not sign in to Spotify.</li>
                <li>YouTube Music, because the API matches song titles and fetches audio from there. The file saved to Drive is that audio, not a Spotify preview.</li>
                <li>Vercel, which hosts the website and the API and keeps platform logs of requests to those hosts.</li>
@@ -207,11 +216,11 @@ export default function PrivacyPolicy() {
             </p>
             <p>
                Save Songs uses that information only to provide the Drive folder, upload, skip, and playback
-               features that are visible in the interface. It transfers that information to Google, because
-               that is how the Drive request is made. It does not transfer Google user data to the Save Songs
-               API, to an advertising network, or to a data broker. The product has no feature that shows one
-               person&apos;s Drive files to anyone else, and the server does not receive those files for a
-               person to read.
+               features that are visible in the interface. Listing and uploading send that information to
+               Google from your browser. Playing a saved song sends the access token to the Save Songs API,
+               which reads that one file from Google and streams it back. The API does not store the token
+               or the file, and it does not send Google user data to an advertising network or a data broker.
+               The product has no feature that shows one person&apos;s Drive files to anyone else.
             </p>
             <p>
                These practices are how the application handles Google user data, and they are meant to meet
@@ -233,9 +242,9 @@ export default function PrivacyPolicy() {
                until you delete that folder. Any browser signed into that Google account can read those
                folders after you sign in there. The copy of that list in this browser, the folder id, the
                splash timestamp, and the install hint stay on this device until you clear the site&apos;s
-               stored data. The application does not expire them on a schedule. The access token lives only
-               until it expires or the tab closes. Google sets the expiry. The code treats a token as due
-               for replacement about a minute before that time.
+               stored data. The application does not expire them on a schedule. The access token stays in
+               session storage until it expires or the tab closes. Google sets the expiry. The code treats
+               a token as due for replacement about a minute before that time.
             </p>
             <p>
                The audio cache on this device, if the service worker stored an API response, lasts up to
@@ -252,8 +261,9 @@ export default function PrivacyPolicy() {
          <LegalSection id="protection" heading="How information is protected">
             <p>
                The live website and API are served over HTTPS. The Google access token stays in the
-               browser tab and is sent only to Google. Drive file bytes used for playback are fetched
-               by the browser from Google.
+               browser tab. It is sent to Google, and, when you press play, to the Save Songs API so
+               that API can read the one file you pressed. The API does not store that token. Drive
+               file bytes for playback are fetched by the API from Google and streamed to the browser.
             </p>
             <p>
                This policy does not claim encryption of the on-device library beyond what your browser

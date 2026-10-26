@@ -11,6 +11,7 @@ import { formatDuration } from "@/lib/formatters";
 import {
    driveFileId,
    driveFiles,
+   removeDriveFile,
    driveFolder,
    extensionFor,
    fileBase,
@@ -27,6 +28,7 @@ import { requestWakeLock, releaseWakeLock } from "@/lib/keepAwake";
 import { playlistsStore, tracksStore } from "@/lib/localDb";
 import { parseSpotifyUrl } from "@/lib/utils";
 import { usePlayerStore } from "@/store/player.store";
+import { useQueueStore } from "@/store/queue.store";
 import type { Playlist, Track } from "@/types";
 
 type SavePhase =
@@ -150,6 +152,24 @@ export default function LocalPlaylist() {
    };
 
    useEffect(() => {
+      if (isGoogleSignedIn()) return;
+      const clearAccountSongs = () => {
+         if (isGoogleSignedIn()) return;
+         usePlayerStore.setState({
+            currentTrack: null,
+            isPlaying: false,
+            isLoading: false,
+            progress: 0,
+            duration: 0,
+            savedProgress: 0,
+         });
+         useQueueStore.getState().clearQueue();
+      };
+      clearAccountSongs();
+      return usePlayerStore.persist.onFinishHydration(clearAccountSongs);
+   }, []);
+
+   useEffect(() => {
       if (!isGoogleSignedIn()) return;
       let cancelled = false;
       setSignedIn(true);
@@ -224,7 +244,21 @@ export default function LocalPlaylist() {
          for (const track of tracks) {
             const base = fileBase(track.artist?.name || "", track.title);
             setPhase({ kind: "exporting", done, total: tracks.length, title: track.title });
-            let fileId = driveFileId(existing, base);
+            let stored = driveFileId(existing, base);
+            if (stored && stored.bytes === 0) {
+               try {
+                  await removeDriveFile(stored.id);
+                  for (const [name, file] of [...existing]) {
+                     if (file.id === stored.id) existing.delete(name);
+                  }
+                  stored = undefined;
+               } catch {
+                  done += 1;
+                  setPhase({ kind: "exporting", done, total: tracks.length, title: track.title });
+                  continue;
+               }
+            }
+            let fileId = stored?.id;
             if (!fileId) {
                try {
                   const response = await fetch(tracksApi.getStreamUrl(track.id, { download: true, name: base }), {
@@ -234,9 +268,10 @@ export default function LocalPlaylist() {
                   });
                   if (!response.ok) throw new Error("skip");
                   const blob = await response.blob();
+                  if (blob.size < 1) throw new Error("The download was empty");
                   const filename = `${base}${extensionFor(blob.type || response.headers.get("content-type") || "")}`;
                   fileId = await uploadToDrive(folderId, filename, blob);
-                  existing.set(filename, fileId);
+                  existing.set(filename, { id: fileId, bytes: blob.size });
                } catch {
                   done += 1;
                   setPhase({ kind: "exporting", done, total: tracks.length, title: track.title });

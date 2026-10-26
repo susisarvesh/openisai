@@ -30,40 +30,8 @@ clientsClaim();
 precacheAndRoute(self.__WB_MANIFEST);
 cleanupOutdatedCaches();
 
-// Drive playback. The page posts the access token; the token is not in the URL.
-// This route streams Google's response, including Range, and is not cached —
-// CacheFirst would wait for the whole file before the song can start.
-
-let driveAccessToken = "";
-
-registerRoute(
-    ({ url }) => url.pathname.startsWith("/drive-media/"),
-    async ({ request, url }) => {
-        const fileId = decodeURIComponent(url.pathname.slice("/drive-media/".length));
-        if (!fileId || !driveAccessToken) {
-            return new Response("Sign in again to play this song", { status: 401 });
-        }
-        const headers = new Headers();
-        headers.set("Authorization", `Bearer ${driveAccessToken}`);
-        const range = request.headers.get("Range");
-        if (range) headers.set("Range", range);
-        const upstream = await fetch(
-            `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`,
-            { headers },
-        );
-        const responseHeaders = new Headers();
-        for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) {
-            const value = upstream.headers.get(name);
-            if (value) responseHeaders.set(name, value);
-        }
-        if (!responseHeaders.has("accept-ranges")) responseHeaders.set("Accept-Ranges", "bytes");
-        return new Response(upstream.body, {
-            status: upstream.status,
-            statusText: upstream.statusText,
-            headers: responseHeaders,
-        });
-    },
-);
+// Saved Drive songs are streamed by the API at /api/drive-audio/. This worker
+// must not cache that response or answer its range request from a saved copy.
 
 // ── Cache names ───────────────────────────────────────────────
 
@@ -181,6 +149,7 @@ registerRoute(
         return (
             p.startsWith("/api/") &&
             !p.includes("/stream/") &&
+            !p.includes("/drive-audio/") &&
             !p.includes("/downloads") &&
             !p.includes("/search") &&
             !p.includes("/lyrics") &&
@@ -233,7 +202,7 @@ registerRoute(
 // Covers: /api/health, /api/lyrics, /api/settings, etc.
 
 registerRoute(
-    ({ url }) => url.pathname.startsWith("/api/"),
+    ({ url }) => url.pathname.startsWith("/api/") && !url.pathname.includes("/drive-audio/"),
     new NetworkFirst({
         cacheName: CACHE.API,
         networkTimeoutSeconds: 5,
@@ -462,10 +431,6 @@ self.addEventListener("message", (event) => {
             self.skipWaiting();
             break;
 
-        case "DRIVE_TOKEN":
-            driveAccessToken = typeof event.data?.token === "string" ? event.data.token : "";
-            event.ports[0]?.postMessage({ ok: true });
-            break;
 
         case "CLEAR_API_CACHE":
             caches.delete(CACHE.API).then(() => {
