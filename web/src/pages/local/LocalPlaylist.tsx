@@ -25,6 +25,7 @@ import {
    type SharedPlaylist,
 } from "@/lib/googleDrive";
 import { requestWakeLock, releaseWakeLock } from "@/lib/keepAwake";
+import { rememberDriveAudio } from "@/lib/playback/driveCache";
 import { playlistsStore, tracksStore } from "@/lib/localDb";
 import { parseSpotifyUrl } from "@/lib/utils";
 import { usePlayerStore } from "@/store/player.store";
@@ -272,6 +273,7 @@ export default function LocalPlaylist() {
                   const filename = `${base}${extensionFor(blob.type || response.headers.get("content-type") || "")}`;
                   fileId = await uploadToDrive(folderId, filename, blob);
                   existing.set(filename, { id: fileId, bytes: blob.size });
+                  void rememberDriveAudio(fileId, blob).catch(() => {});
                } catch {
                   done += 1;
                   setPhase({ kind: "exporting", done, total: tracks.length, title: track.title });

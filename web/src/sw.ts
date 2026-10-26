@@ -11,6 +11,13 @@ import { ExpirationPlugin } from "workbox-expiration";
 import { CacheableResponsePlugin } from "workbox-cacheable-response";
 import { RangeRequestsPlugin } from "workbox-range-requests";
 import { BackgroundSyncPlugin } from "workbox-background-sync";
+import {
+    DRIVE_AUDIO_CACHE,
+    driveFileIdFromPath,
+    isWholeFile,
+    rangedAudioResponse,
+    rememberDriveAudio,
+} from "./lib/playback/driveCache";
 
 declare let self: ServiceWorkerGlobalScope;
 
@@ -30,20 +37,78 @@ clientsClaim();
 precacheAndRoute(self.__WB_MANIFEST);
 cleanupOutdatedCaches();
 
-// Saved Drive songs are streamed by the API at /api/drive-audio/. This worker
-// must not cache that response or answer its range request from a saved copy.
+// A saved Drive song can play from rheoson-drive-audio-v1 with no network.
+// The copy is the whole file, keyed by /api/drive-audio/{fileId}. This worker
+// slices that copy into the 206 the audio element asked for. A live grant URL
+// is fetched and returned unchanged. Only a complete body is stored, so a
+// seek cannot replace the file. The grant and the Google token are not stored.
 
 // ── Cache names ───────────────────────────────────────────────
 
 const CACHE = {
     ARTWORK: "rheoson-artwork-v2",
     AUDIO: "rheoson-audio-v2",
+    DRIVE_AUDIO: DRIVE_AUDIO_CACHE,
     API: "rheoson-api-v2",
     SEARCH: "rheoson-search-v1",
     METADATA: "rheoson-metadata-v1",
     FONTS: "rheoson-fonts-v1",
     OFFLINE: "rheoson-offline-v1",
 } as const;
+
+async function serveStoredDriveAudio(url: URL, request: Request): Promise<Response> {
+    const fileId = driveFileIdFromPath(url.pathname);
+    if (!fileId) return new Response(null, { status: 404 });
+    const cache = await caches.open(CACHE.DRIVE_AUDIO);
+    const hit = await cache.match(`/api/drive-audio/${encodeURIComponent(fileId)}`);
+    if (!hit) return new Response(null, { status: 404 });
+    return rangedAudioResponse(hit, request);
+}
+
+async function storeWholeDriveAudio(response: Response, fileId: string): Promise<void> {
+    try {
+        if (response.status !== 200 && response.status !== 206) return;
+        const range = response.headers.get("content-range");
+        if (response.status === 206 && range && !/^bytes 0-\d+\/\d+$/.test(range.trim())) return;
+        const blob = await response.blob();
+        if (range) {
+            if (!isWholeFile(response.status, range, blob.size)) return;
+        } else if (response.status !== 200 || blob.size < 32) {
+            return;
+        }
+        await rememberDriveAudio(fileId, blob);
+    } catch {
+        /* a dropped stream or a full disk leaves the previous copy in place */
+    }
+}
+
+function driveAudioRoute(method: "GET" | "HEAD") {
+    registerRoute(
+        ({ url }) => driveFileIdFromPath(url.pathname) !== null,
+        async ({ url, request, event }) => {
+            if (url.searchParams.get("offline") === "1" || !url.searchParams.has("play")) {
+                return serveStoredDriveAudio(url, request);
+            }
+            try {
+                const response = await fetch(request);
+                const fileId = driveFileIdFromPath(url.pathname);
+                const range = response.headers.get("content-range");
+                const whole = response.status === 200
+                    || (response.status === 206 && !!range && /^bytes 0-\d+\/\d+$/.test(range.trim()));
+                if (request.method === "GET" && fileId && whole) {
+                    event.waitUntil(storeWholeDriveAudio(response.clone(), fileId));
+                }
+                return response;
+            } catch {
+                return serveStoredDriveAudio(url, request);
+            }
+        },
+        method,
+    );
+}
+
+driveAudioRoute("GET");
+driveAudioRoute("HEAD");
 
 // ── Fonts ─────────────────────────────────────────────────────
 // Google Fonts — CacheFirst, 1 year.
@@ -238,6 +303,7 @@ registerRoute(
         return (
             p.startsWith("/api/") &&
             !p.includes("/stream/") &&
+            !p.includes("/drive-audio/") &&
             !p.includes("/downloads") &&
             !p.includes("/socket.io") &&
             (method === "POST" || method === "PUT" || method === "DELETE" || method === "PATCH")
@@ -257,6 +323,7 @@ registerRoute(
         return (
             p.startsWith("/api/") &&
             !p.includes("/stream/") &&
+            !p.includes("/drive-audio/") &&
             !p.includes("/downloads") &&
             !p.includes("/socket.io") &&
             (method === "POST" || method === "PUT" || method === "DELETE" || method === "PATCH")
@@ -276,6 +343,7 @@ registerRoute(
         return (
             p.startsWith("/api/") &&
             !p.includes("/stream/") &&
+            !p.includes("/drive-audio/") &&
             !p.includes("/downloads") &&
             !p.includes("/socket.io") &&
             (method === "POST" || method === "PUT" || method === "DELETE" || method === "PATCH")
@@ -295,6 +363,7 @@ registerRoute(
         return (
             p.startsWith("/api/") &&
             !p.includes("/stream/") &&
+            !p.includes("/drive-audio/") &&
             !p.includes("/downloads") &&
             !p.includes("/socket.io") &&
             (method === "POST" || method === "PUT" || method === "DELETE" || method === "PATCH")
@@ -354,6 +423,10 @@ setCatchHandler(async ({ request }) => {
         const offlineCache = await caches.open(CACHE.OFFLINE);
         const cached = await offlineCache.match("/");
         if (cached) return cached;
+    }
+
+    if (request.url.includes("/api/drive-audio/")) {
+        return new Response(null, { status: 404 });
     }
 
     // For API requests, return a proper offline JSON response

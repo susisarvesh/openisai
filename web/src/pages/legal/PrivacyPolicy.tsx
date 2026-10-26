@@ -10,7 +10,8 @@ export default function PrivacyPolicy() {
                Save Songs is the website at {PUBLIC_SITE_ORIGIN}.
                You paste a public Spotify playlist or album link, check the song list, and can save
                those songs into a folder in your own Google Drive. After that, the site can play
-               those files from your Drive.
+               those files from your Drive. Once a song has been saved or played on this device, that
+               copy can play again with no network.
             </p>
             <p>
                You do not create a Save Songs account. The main screen does not ask for your name,
@@ -78,7 +79,7 @@ export default function PrivacyPolicy() {
                <li>Lists the files in that folder. The request asks only for each file&apos;s id and name, and skips trashed files.</li>
                <li>Uploads an audio file for a song that is not already in the folder. The upload creates a new file. It does not replace a file that is already there. A song that fails to upload is skipped.</li>
                <li>Writes or replaces <code>save-songs.json</code> in that folder so the playlist list matches the files that were saved.</li>
-               <li>When you press play, the page asks the Save Songs API to read that one audio file from Drive and play it. The API streams Drive&apos;s response. The audio is not stored in the on-device library database. Pressing play again asks Drive for the file again.</li>
+               <li>When you press play, this browser plays the copy of that song it already has, with no network, when that copy exists. If it does not, the page asks the Save Songs API to read that one audio file from Drive and play it, then keeps the audio on this device. The Drive file id is what the on-device library database stores. The audio itself is kept in this browser&apos;s cache under the name <code>rheoson-drive-audio-v1</code>.</li>
             </ul>
             <p>
                The folder id is also stored on this device under a local storage key that starts with{" "}
@@ -111,10 +112,12 @@ export default function PrivacyPolicy() {
             <p>
                The service worker can cache the audio response it receives from the Save Songs API while a
                song is being saved. That cache is named <code>rheoson-audio-v2</code>, holds at most 200
-               files, and keeps an entry for up to 90 days, on this device. Playback from Drive goes through
-               the Save Songs API and is not put in <code>rheoson-audio-v2</code>. The service worker
-               also caches the website&apos;s own files so the page can load again, and it can cache some API
-               responses from older parts of the same website.
+               files, and keeps an entry for up to 90 days, on this device. A saved Drive song is kept in
+               a different cache, <code>rheoson-drive-audio-v1</code>, so it can play while this device is
+               offline. That entry is the audio file. It does not include the Google access token, and it
+               is not part of <code>rheoson-audio-v2</code>. The service worker also caches the
+               website&apos;s own files so the page can load again, and it can cache some API responses
+               from older parts of the same website.
             </p>
             <p>The Save Songs API is a separate service. For the main screen it receives:</p>
             <ul className="list-disc space-y-2 pl-5">
@@ -131,10 +134,12 @@ export default function PrivacyPolicy() {
                   bytes to your Drive. The Google token is not part of this save request.
                </li>
                <li>
-                  When you press play on a saved song, the page sends the Google access token in a header
-                  on <code>/api/drive-audio/grant</code>, then requests the audio for that file. The API
-                  uses the token to read that file from Drive and does not store it. The audio address
-                  contains a short-lived encrypted grant, not the token.
+                  When you press play on a saved song that is not already stored on this device, the page
+                  sends the Google access token in a header on <code>/api/drive-audio/grant</code>, then
+                  requests the audio for that file. The API uses the token to read that file from Drive
+                  and does not store it. The audio address contains a short-lived encrypted grant, not
+                  the token. The page then keeps the audio in <code>rheoson-drive-audio-v1</code>. A
+                  later play of that song uses the copy on this device and does not send the token.
                </li>
                <li>
                   An application token that is the same for every visitor and is embedded in the website
@@ -143,10 +148,11 @@ export default function PrivacyPolicy() {
                </li>
             </ul>
             <p>
-               The API receives your Google access token only when you press play, and only so it can read
-               that one file. It streams the audio and does not store the token or the file. The main
-               screen does not send the library to a database. Authentication on the API is turned off by
-               default, and this screen does not create a user record.
+               The API receives your Google access token only when you press play on a song that is not
+               already stored on this device, and only so it can read that one file. It streams the audio
+               and does not store the token or the file. The copy used for offline play stays in this
+               browser. The main screen does not send the library to a database. Authentication on the
+               API is turned off by default, and this screen does not create a user record.
             </p>
             <p>
                While the API prepares audio, its code can write a temporary copy in a cache directory.
@@ -247,10 +253,13 @@ export default function PrivacyPolicy() {
                a token as due for replacement about a minute before that time.
             </p>
             <p>
-               The audio cache on this device, if the service worker stored an API response, lasts up to
-               90 days or until the 200-file limit drops it. The server&apos;s temporary audio cache has
-               a size cap in code and no separate retention period in this repository. Log retention is
-               not set in this repository.
+               The save-audio cache on this device, <code>rheoson-audio-v2</code>, lasts up to 90 days or
+               until the 200-file limit drops it. The offline copy of a Drive song,
+               <code>rheoson-drive-audio-v1</code>, stays until you clear this site&apos;s stored data.
+               The application does not expire that copy on a schedule. The browser can still drop it if
+               the device runs out of space. The server&apos;s temporary audio cache has a size cap in
+               code and no separate retention period in this repository. Log retention is not set in this
+               repository.
             </p>
             <p>
                Files uploaded to Drive stay in your Drive until you delete them there. Revoking this
@@ -261,9 +270,11 @@ export default function PrivacyPolicy() {
          <LegalSection id="protection" heading="How information is protected">
             <p>
                The live website and API are served over HTTPS. The Google access token stays in the
-               browser tab. It is sent to Google, and, when you press play, to the Save Songs API so
-               that API can read the one file you pressed. The API does not store that token. Drive
-               file bytes for playback are fetched by the API from Google and streamed to the browser.
+               browser tab. It is sent to Google, and, when you press play on a song that is not already
+               stored on this device, to the Save Songs API so that API can read the one file you pressed.
+               The API does not store that token. Drive file bytes for that first play are fetched by the
+               API from Google and streamed to the browser, which then keeps a copy for offline play. A
+               song saved from this page is kept at the same time it is uploaded.
             </p>
             <p>
                This policy does not claim encryption of the on-device library beyond what your browser

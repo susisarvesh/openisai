@@ -19,7 +19,9 @@ Handing the downloaded bytes to the audio element as a blob URL failed the same 
 7. The API requests `alt=media` with that closed range and streams Drive's response. Drive's status, `Content-Type`, `Content-Length`, and `Content-Range` are copied through unchanged.
 8. A `401` drops the in-memory token and the page asks for one new grant. `403`, `404`, and `416` are not retried.
 
-The service worker does not cache `/api/drive-audio/`. A cached response there would be served back to a later range request.
+A complete copy of a saved song is kept in this browser's Cache Storage under `rheoson-drive-audio-v1`, keyed by `/api/drive-audio/{fileId}` with no grant and no token. Saving a song stores that copy immediately. Playing a song that is not yet copied uses the grant URL, and the page stores the finished file after that play.
+
+The next play uses `/api/drive-audio/{fileId}?offline=1`. The service worker slices the stored file into a real `206` for the requested range, including `bytes=0-`. It does not CacheFirst the grant URL, and a partial seek is not written over the full file. A song saved before this copy existed needs one online play, or a new save, before it can play offline.
 
 These saved files are m4a, and the index is often at the end of the file. The response is a real `206`, so the element can play it. The first sound can still wait until that index arrives. This path does not remux the file.
 

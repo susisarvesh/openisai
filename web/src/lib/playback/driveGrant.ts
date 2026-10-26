@@ -5,6 +5,7 @@
 
 import { API_BASE } from "@/lib/constants";
 import { dropGoogleAccessToken, googleAccessToken, googleTokenExpirySeconds } from "@/lib/googleDrive";
+import { keepGrantCopy, offlineDriveUrl } from "@/lib/playback/driveCache";
 
 async function failure(response: Response): Promise<Error> {
    try {
@@ -65,6 +66,16 @@ async function requestGrant(fileId: string, signal: AbortSignal | undefined, all
    return url;
 }
 
-export function drivePlaybackUrl(fileId: string, signal?: AbortSignal): Promise<string> {
-   return requestGrant(fileId, signal, true);
+export async function drivePlaybackUrl(fileId: string, signal?: AbortSignal): Promise<string> {
+   const cached = await offlineDriveUrl(fileId);
+   if (cached) return cached;
+   try {
+      const url = await requestGrant(fileId, signal, true);
+      void keepGrantCopy(fileId, url).catch(() => {});
+      return url;
+   } catch (error) {
+      const again = await offlineDriveUrl(fileId);
+      if (again) return again;
+      throw error;
+   }
 }
