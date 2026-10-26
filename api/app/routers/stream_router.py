@@ -987,37 +987,36 @@ async def _fill_buffer_ytdlp(track_id: str, dest: Path, on_mime=None) -> str:
     """
     yt_url = f"https://www.youtube.com/watch?v={track_id}"
 
-    extractor_args_variants = [
-        "youtube:player_client=mweb,android,web",
-        "youtube:player_client=web",
-        "youtube:player_client=android",
-    ]
     user_agents = [
         "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ]
     # Audio-only, m4a first — identical on every host, with or without ffmpeg.
+    # The client list is the same ladder used to resolve a CDN URL. mweb and
+    # web answer with formats this selector cannot pick, so they are not here.
     base_cmd = [
         *toolchain.ytdlp_command(), "--quiet", "--no-warnings", "--no-playlist",
         "--format", stream_service.RAW_AUDIO_SELECTOR, "-o", "-",
     ]
 
-    for attempt in range(3):
-        extractor_args = extractor_args_variants[min(attempt, len(extractor_args_variants) - 1)]
+    for attempt, extractor_args in enumerate(stream_service.client_attempts()):
         ua = user_agents[attempt % len(user_agents)]
-        cmd = [*base_cmd, "--extractor-args", extractor_args, "--add-header", f"User-Agent:{ua}", yt_url]
+        cmd = [*base_cmd]
+        for arg in extractor_args:
+            cmd += ["--extractor-args", arg]
+        cmd += ["--add-header", f"User-Agent:{ua}", yt_url]
 
         log.info("stream.ytdlp.fill_buffer", track_id=track_id, attempt=attempt + 1)
+        err_path = dest.with_suffix(f".err{attempt}")
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE,
-                # Never read; PIPE here would fill its 64 KB OS buffer on a
-                # chatty run (client-ladder retries are exactly that) and
-                # stall yt-dlp mid-write. Warnings are of no use while the
-                # bytes are already flowing.
-                stderr=asyncio.subprocess.DEVNULL,
-            )
+            with open(err_path, "w") as err_file:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd, stdout=asyncio.subprocess.PIPE,
+                    # A pipe would fill its 64 KB OS buffer and stall yt-dlp.
+                    # A file keeps the error without being read until it fails.
+                    stderr=err_file,
+                )
         except Exception as e:
             log.warning("stream.buffer.spawn_failed", track_id=track_id, attempt=attempt + 1, error=str(e))
             await asyncio.sleep(0.8 + attempt)
@@ -1044,6 +1043,17 @@ async def _fill_buffer_ytdlp(track_id: str, dest: Path, on_mime=None) -> str:
                 await asyncio.wait_for(proc.wait(), timeout=5.0)
             except asyncio.TimeoutError:
                 pass
+            tail = ""
+            try:
+                tail = err_path.read_text(errors="replace")[-180:].replace("\n", " ").strip()
+            except OSError:
+                pass
+            log.warning(
+                "stream.buffer.empty",
+                track_id=track_id,
+                attempt=attempt + 1,
+                error=tail,
+            )
             await asyncio.sleep(0.8 + attempt * 0.5)
             continue
 
@@ -1503,6 +1513,27 @@ async def _serve_ytdlp(track_id: str, request: Request) -> Response:
     # silence. Answering with the growing buffer lets playback start from the
     # first frames; the element re-requests with a real offset when the user
     # actually seeks, and that one does need the finished file.
+    # A save downloads the whole file and stores it. Opening the response
+    # before the bytes exist is what turned a failed fetch into a 502 after
+    # the response had already started, and the page then saved nothing.
+    if (request.query_params.get("download") or "").lower() in _DOWNLOAD_FLAGS:
+        try:
+            await asyncio.wait_for(asyncio.shield(session["task"]), timeout=50)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            pass
+        if (
+            session["done"].is_set()
+            and session["ok"]
+            and session["path"].exists()
+            and session["path"].stat().st_size > 0
+        ):
+            await _complete_session(track_id, session)
+            return _serve_local(session["path"], request, session.get("mime"))
+        async with _session_lock:
+            _remote_sessions.pop(track_id, None)
+        _failure_cache[track_id] = time.monotonic() + _FAILURE_TTL
+        raise error_codes.fail(error_codes.STREAM.WARMUP_FAILED, 502)
+
     rng = request.headers.get("range")
     if rng:
         if stream_service.is_whole_file_range(rng):

@@ -115,6 +115,26 @@ _EXTRACTOR_FAILURE_MARKERS = (
     "content is not available",
 )
 
+#: Failures of the network itself. These are the only reason to stop the
+#: client ladder early. A warning from one YouTube client must not skip the
+#: clients that can still return a file.
+_TRANSPORT_FAILURE_MARKERS = (
+    "timed out",
+    "timeout",
+    "name or service not known",
+    "temporary failure in name resolution",
+    "connection refused",
+    "network is unreachable",
+    "proxy",
+    "certificate verify failed",
+)
+
+
+def is_transport_failure(text: str) -> bool:
+    """True when retrying another YouTube client cannot help."""
+    low = (text or "").lower()
+    return any(marker in low for marker in _TRANSPORT_FAILURE_MARKERS)
+
 
 def is_extractor_failure(text: str) -> bool:
     """True when switching player client is worth trying."""
@@ -243,14 +263,11 @@ def resolve_direct_url_sync(track_id: str) -> Optional[str]:
                 return line
 
         stderr = (proc.stderr or b"").decode("utf-8", "replace").strip().splitlines()
-        if stderr and not is_extractor_failure(stderr[-1]):
-            # Not a client problem (network, disk) — the rest of the ladder
-            # would only waste a subprocess each.
-            log.warning(
-                "stream.resolve.transport_error",
-                track_id=track_id,
-                error=stderr[-1][:200],
-            )
+        tail = stderr[-1][:200] if stderr else ""
+        if tail:
+            log.warning("stream.resolve.client_failed", track_id=track_id, error=tail)
+        if tail and is_transport_failure(tail):
+            # The network failed. Another YouTube client would only repeat it.
             break
 
     return None
